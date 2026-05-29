@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+#
+# note - notebook manager
+#
+# Standalone script; symlink into $PATH. Owns cross-notebook ops only —
+# inside a notebook, use vim + wikijump.vim plugin. All commands operate
+# relative to $NOTE_HOME.
+#
+# Two notational-velocity switchers (filter as you type; enter opens,
+# ctrl-n creates the typed name; -c swaps that for enter-creates-on-no-match
+# and drops ctrl-n, so only one create key is ever live) plus shell
+# integration:
+#   note [<query>]        note switcher  -> opens $EDITOR
+#   note book [<query>]   notebook switcher -> prints a path (compose: nb)
+#   note init <shell>     emit `nb` + completion for eval
+#
+# No command mutates the parent shell; `init` only prints code for the
+# user's `eval` to define. cd happens through the `nb` function.
+
+# Notebooks are the directories directly under $NOTE_HOME — flat, no nesting,
+# no marker needed to identify one. note reads the current notebook from $PWD.
+
+# Files touched when `book` creates a notebook. `.wikijump` is scaffolded so
+# the wikijump.vim plugin can find the notebook root by walking up while you
+# edit; note itself does not read it. Append your own, e.g. README.md.
+readonly NEW_NOTEBOOK_FILES=(".wikijump")
+
+# Editor for opening/creating notes; honors $EDITOR (may include flags, e.g.
+# "code -w"), defaults to vim.
+readonly EDITOR_CMD=(${EDITOR:-vim})
+
+# Command run inside a freshly created notebook (only on creation, never when
+# selecting an existing one). Lets a new notebook drop you straight into an
+# editor. Empty array disables the hook. It runs with the new notebook as cwd
+# and its terminal I/O is bound to /dev/tty, so it works even when `nb` runs
+# `note book` inside $(...) and captures this script's stdout for the cd.
+readonly NEW_NOTEBOOK_CMD=("${EDITOR_CMD[@]}" README.md)
+
+# Print a message to stderr and exit non-zero.
+die() { echo "$*" >&2; exit 1; }
+
+# List note files (markdown, excluding _-prefixed) beneath a root.
+list_notes() { rg --files --type md --glob '!_*' "$1"; }
+
+show_help() {
+    cat <<'EOF'
+note - notebook manager
+
+USAGE
+    note [<query>]           note switcher: filter notes, open or create
+    note <command> [args]
+
+COMMANDS
+    book [<query>]           notebook switcher: filter, select or create;
+                               prints the notebook path (compose: nb)
+    init <shell>             print shell integration (nb + completion)
+                               for eval; <shell> is bash or zsh
+    help                     show this message
+
+SWITCHER KEYS
+    enter                    open the highlighted match (with -c, also create
+                               the typed name when nothing matches)
+    ctrl-n                   create a note/notebook named by your query
+                               (default mode only; near-matches stay visible,
+                                so a typo never silently forks the namespace)
+
+SWITCHER FLAGS
+    -c, --create-on-enter    make enter create on no match and drop ctrl-n, so
+                               a single key both opens and creates (fast
+                               capture); applies to note and book. An
+                               over-filtered (empty) list creates your raw
+                               query, so use it knowingly.
+
+NOTE SWITCHER SCOPE
+    -n, --notebook <nb>      restrict to notebook <nb>
+    (inside a notebook)      restrict to the current notebook
+    (otherwise)              search all of $NOTE_HOME; creating a new note
+                               then needs -n or a notebook as cwd
+    (.md is implicit)        notes list without the .md suffix and get it
+                               added on create, so you never type .md
+
+COMPOSE
+    Shell integration (add to your rc):
+        eval "$(note init bash)"
+    Defines nb() to cd into a notebook:
+        nb [<query>] — pick or create a notebook, then cd into it
+
+ENVIRONMENT
+    NOTE_HOME       notes root (default: ~/notes)
+EOF
+}
+
+# Notational-velocity picker over candidates on stdin.
+# Args: optional pre-fill query; create_on_enter ("1" makes enter the create
+# key and drops ctrl-n). Sets NV_QUERY, NV_KEY, NV_SEL, NV_RC.
+# The two modes have exactly one create key each, never both: default binds
+# ctrl-n via --expect; create_on_enter omits --expect so enter is the only
+# create path. Callers gate create on NV_KEY == ctrl-n, or — under
+# create_on_enter — on enter with no match (NV_RC == 1). Esc (130) never
+# creates, so an aborted picker cannot fork the namespace by accident.
+nv_pick() {
+    local q="$1" create_on_enter="$2" out
+    local args=(-e --height '~40%' --layout=reverse --print-query)
+    if [ "$create_on_enter" = 1 ]; then
+        args+=(--header 'enter: open/create')
+    else
+        args+=(--expect=ctrl-n --header 'enter: open   ctrl-n: create typed name')
+    fi
+    [ -n "$q" ] && args+=(-q "$q")
+    out=$(fzf "${args[@]}"); NV_RC=$?
+    # fzf prints the query first (--print-query), then a key line only when
+    # --expect is set, then the selection. Read without spawning subshells;
+    # in create_on_enter mode there is no key line, so clear NV_KEY ourselves.
+    if [ "$create_on_enter" = 1 ]; then
+        NV_KEY=""
+        { IFS= read -r NV_QUERY; IFS= read -r NV_SEL; } <<< "$out"
+    else
+        { IFS= read -r NV_QUERY; IFS= read -r NV_KEY; IFS= read -r NV_SEL; } <<< "$out"
+    fi
+}
+
+# True when the last nv_pick outcome means "create": explicit ctrl-n, or — when
+# the caller passes 1 — enter on no match (NV_RC == 1). Reads nv_pick's globals.
+should_create() { [ "$NV_KEY" = ctrl-n ] || { [ "$1" = 1 ] && [ "$NV_RC" = 1 ]; }; }
+
+# note [-n <nb>] [<query>] — open a note, or create it on ctrl-n.
+note_switch() {
+    local notebook="" query="" create_on_enter=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -n|--notebook)
+                [ -n "$2" ] || die "missing notebook name"
+                notebook="$2"; shift 2 ;;
+            -c|--create-on-enter)
+                create_on_enter=1; shift ;;
+            -*) die "unknown flag: $1" ;;
+            *)
+                [ -z "$query" ] || die "unexpected arg: $1"
+                query="$1"; shift ;;
+        esac
+    done
+
+    # Resolve search root and whether a single notebook is in scope.
+    local root scoped=0
+    if [ -n "$notebook" ]; then
+        root="$home/$notebook"
+        [ -d "$root" ] || die "no notebook: $notebook"
+        scoped=1
+    elif [[ "$PWD" == "$home"/?* ]]; then
+        # inside $NOTE_HOME: the notebook is the first path component
+        local rel="${PWD#"$home"/}"
+        root="$home/${rel%%/*}"; scoped=1
+    else
+        root="$home"
+    fi
+
+    # Process substitution (not a pipe) so nv_pick runs in this shell and
+    # its NV_* globals survive — a pipeline would subshell them away.
+    # Display drops the .md suffix; it is re-added on open/create below.
+    nv_pick "$query" "$create_on_enter" \
+        < <(list_notes "$root" | sed -e "s|^$root/||" -e 's/\.md$//')
+
+    if should_create "$create_on_enter"; then
+        # Create — but reuse an existing same-basename note before writing.
+        [ -n "$NV_QUERY" ] || exit 0
+        local base="${NV_QUERY%.md}.md" existing
+        existing=$(list_notes "$root" | grep -i "/${base}\$" | head -n1)
+        if [ -n "$existing" ]; then
+            "${EDITOR_CMD[@]}" "$existing"
+        elif [ "$scoped" = 1 ]; then
+            "${EDITOR_CMD[@]}" "$root/$base"
+        else
+            die "create needs a notebook: use -n <nb> or run inside one"
+        fi
+    elif [ "$NV_RC" = 0 ] && [ -n "$NV_SEL" ]; then
+        # Selection shows no .md; re-add it unless the path exists as displayed.
+        local target="$root/$NV_SEL"
+        [ -e "$target" ] || target="$target.md"
+        "${EDITOR_CMD[@]}" "$target"
+    fi
+}
+
+# note book [<query>] — print a notebook path; create it on ctrl-n.
+book_switch() {
+    local query="" create_on_enter=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -c|--create-on-enter) create_on_enter=1; shift ;;
+            -*) die "unknown flag: $1" ;;
+            *) [ -z "$query" ] || die "unexpected arg: $1"; query="$1"; shift ;;
+        esac
+    done
+
+    nv_pick "$query" "$create_on_enter" < <(find "$home" -mindepth 1 -maxdepth 1 -type d \
+                            -not -name '_*' -not -name '.*' -printf '%f\n')
+
+    if should_create "$create_on_enter"; then
+        [ -n "$NV_QUERY" ] || exit 0
+        local dst="$home/$NV_QUERY"
+        if [ -d "$dst" ]; then
+            :  # already a notebook — select it
+        elif [ -e "$dst" ]; then
+            die "exists (not a notebook): $dst"
+        else
+            mkdir -p "$dst" || die "cannot create: $dst"
+            for f in "${NEW_NOTEBOOK_FILES[@]}"; do
+                touch "$dst/$f" || die "cannot create: $dst/$f"
+            done
+            if [ ${#NEW_NOTEBOOK_CMD[@]} -gt 0 ]; then
+                # /dev/tty so an editor gets a real terminal even when nb has
+                # captured our stdout in $(...) for the cd.
+                ( cd "$dst" && "${NEW_NOTEBOOK_CMD[@]}" ) </dev/tty >/dev/tty 2>&1
+            fi
+        fi
+        echo "$dst"
+    elif [ "$NV_RC" = 0 ] && [ -n "$NV_SEL" ]; then
+        echo "$home/$NV_SEL"
+    fi
+}
+
+# note init <shell> — emit nb() + completion for `eval`.
+emit_init() {
+    local shell="${1:-bash}"
+    case "$shell" in
+        bash) ;;
+        zsh)  echo 'autoload -U +X bashcompinit && bashcompinit' ;;
+        *)    die "unknown shell: $shell (bash|zsh)" ;;
+    esac
+    cat <<'EOF'
+nb() { local d; d=$(note book "$@") && [ -n "$d" ] && cd "$d"; }
+
+_note() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    local home="${NOTE_HOME:-$HOME/notes}"
+
+    case "$prev" in
+        -n|--notebook)
+            COMPREPLY=($(cd "$home" 2>/dev/null && compgen -d -- "$cur"))
+            return ;;
+    esac
+    if [ "$COMP_CWORD" = 1 ]; then
+        COMPREPLY=($(compgen -W "book init help -n --notebook -c --create-on-enter" -- "$cur"))
+        return
+    fi
+    case "${COMP_WORDS[1]}" in
+        book)
+            [ "$COMP_CWORD" = 2 ] \
+                && COMPREPLY=($(cd "$home" 2>/dev/null && compgen -d -- "$cur"))
+            ;;
+        init)
+            [ "$COMP_CWORD" = 2 ] \
+                && COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
+            ;;
+    esac
+}
+complete -F _note note
+EOF
+}
+
+main() {
+    home="${NOTE_HOME:-$HOME/notes}"
+
+    case "$1" in
+        -h|--help|help)
+            show_help ;;
+        book)
+            shift; book_switch "$@" ;;
+        init)
+            shift; emit_init "$@" ;;
+        *)
+            note_switch "$@" ;;  # bare default, incl. no args
+    esac
+}
+
+main "$@"
