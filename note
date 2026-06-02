@@ -27,7 +27,7 @@ readonly NEW_NOTEBOOK_FILES=(".wikijump")
 
 # Editor for opening/creating notes; honors $EDITOR (may include flags, e.g.
 # "code -w"), defaults to vim.
-readonly EDITOR_CMD=(${EDITOR:-vim})
+readonly EDITOR_CMD=("${EDITOR:-vim}")
 
 # Command run inside a freshly created notebook (only on creation, never when
 # selecting an existing one). Lets a new notebook drop you straight into an
@@ -39,8 +39,65 @@ readonly NEW_NOTEBOOK_CMD=("${EDITOR_CMD[@]}" README.md)
 # Print a message to stderr and exit non-zero.
 die() { echo "$*" >&2; exit 1; }
 
-# List note files (markdown, excluding _-prefixed) beneath a root.
-list_notes() { rg --files --type md --glob '!_*' "$1"; }
+# Filter selecting note files: markdown, excluding _-prefixed. Shared by the
+# file listing and the tag scan so both see exactly the same set of notes.
+readonly NOTE_FILTER=(--type md --glob '!_*')
+
+# List note files beneath a root.
+list_notes() { rg --files "${NOTE_FILTER[@]}" "$1"; }
+
+# A '#word' tag: preceded by start-of-line or whitespace so markdown headings
+# ('# Title') and URL fragments ('foo#bar') never match.
+readonly TAG_RE='(^|[[:space:]])#[A-Za-z][A-Za-z0-9_/-]*'
+# Byte rg puts between a matched file's path and the tag, and that awk splits
+# on. US (0x1F) can never appear in a path or tag, so the split is always safe.
+readonly TAG_FIELD_SEP=$'\x1f'
+# Dim cyan so tags read as secondary next to the note name (needs fzf --ansi).
+readonly TAG_COLOR=$'\033[2;36m' TAG_RESET=$'\033[0m'
+# Cap the note-name column so one long name can't push every tag off-screen.
+readonly MAX_NAME_WIDTH=50
+
+# List notes beneath a root as two tab-separated columns for the switcher:
+#   <padded name + colored #tags>\t<clean relative path>
+# fzf (with --ansi) shows and searches field 1; nv_pick recovers field 2 as the
+# value. A single rg pass collects every tag with its file; awk aggregates them
+# per note (deduped, in document order) and left-joins the full note list so
+# tag-less notes still appear. Doing this in awk — rather than a shell loop that
+# spawns rg per file — keeps the switcher fast on large notebooks. The name
+# column is padded to the widest name (capped) so tags line up. rg joins each
+# match to its file with a US byte (0x1F), which can't occur in a path, so awk
+# splits the two apart cleanly whatever characters a note name contains.
+notes_with_tags() {
+    local root="$1"
+    awk -F"$TAG_FIELD_SEP" -v root="$root/" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+        -v cap="$MAX_NAME_WIDTH" '
+        # First input (note list): record each note in order, track widest name.
+        FNR == NR {
+            rel = $0; sub("^" root, "", rel); sub(/\.md$/, "", rel)
+            order[++n] = $0; relof[$0] = rel
+            if (length(rel) > width) width = length(rel)
+            next
+        }
+        # Second input (rg "path<US>#tag" matches): collect deduped tags per note.
+        {
+            file = $1; tag = $2; gsub(/[ \t]/, "", tag)
+            if (!((file SUBSEP tag) in seen)) {
+                seen[file SUBSEP tag] = 1
+                tags[file] = tags[file] (tags[file] ? " " : "") tag
+            }
+        }
+        END {
+            if (width > cap) width = cap
+            for (k = 1; k <= n; k++) {
+                file = order[k]; rel = relof[file]
+                suffix = (tags[file] != "") ? "  " col tags[file] rst : ""
+                printf "%-*s%s\t%s\n", width, rel, suffix, rel
+            }
+        }
+    ' <(list_notes "$root") \
+      <(rg -o -N --no-heading --color=never --field-match-separator "$TAG_FIELD_SEP" \
+            "$TAG_RE" "${NOTE_FILTER[@]}" "$root")
+}
 
 show_help() {
     cat <<'EOF'
@@ -92,15 +149,20 @@ EOF
 
 # Notational-velocity picker over candidates on stdin.
 # Args: optional pre-fill query; create_on_enter ("1" makes enter the create
-# key and drops ctrl-n). Sets NV_QUERY, NV_KEY, NV_SEL, NV_RC.
+# key and drops ctrl-n); columns ("1" enables tab-delimited display columns,
+# see below). Sets NV_QUERY, NV_KEY, NV_SEL, NV_RC.
 # The two modes have exactly one create key each, never both: default binds
 # ctrl-n via --expect; create_on_enter omits --expect so enter is the only
 # create path. Callers gate create on NV_KEY == ctrl-n, or — under
 # create_on_enter — on enter with no match (NV_RC == 1). Esc (130) never
 # creates, so an aborted picker cannot fork the namespace by accident.
 nv_pick() {
-    local q="$1" create_on_enter="$2" out
+    local q="$1" create_on_enter="$2" columns="$3" out
     local args=(-e --height '~40%' --layout=reverse --print-query)
+    # Column mode: input is "<display>\t<value>"; show/search only the display
+    # field and interpret its color codes. NV_SEL gets the whole line; we strip
+    # it back to the value field below so callers see a clean value.
+    [ "$columns" = 1 ] && args+=(--ansi --delimiter=$'\t' --with-nth=1 --nth=1)
     if [ "$create_on_enter" = 1 ]; then
         args+=(--header 'enter: open/create')
     else
@@ -117,6 +179,7 @@ nv_pick() {
     else
         { IFS= read -r NV_QUERY; IFS= read -r NV_KEY; IFS= read -r NV_SEL; } <<< "$out"
     fi
+    [ "$columns" = 1 ] && NV_SEL="${NV_SEL#*$'\t'}"
 }
 
 # True when the last nv_pick outcome means "create": explicit ctrl-n, or — when
@@ -156,9 +219,10 @@ note_switch() {
 
     # Process substitution (not a pipe) so nv_pick runs in this shell and
     # its NV_* globals survive — a pipeline would subshell them away.
-    # Display drops the .md suffix; it is re-added on open/create below.
-    nv_pick "$query" "$create_on_enter" \
-        < <(list_notes "$root" | sed -e "s|^$root/||" -e 's/\.md$//')
+    # notes_with_tags drops the .md suffix (re-added on open/create below) and
+    # carries the clean path in a hidden field; nv_pick's column mode returns it
+    # as NV_SEL.
+    nv_pick "$query" "$create_on_enter" 1 < <(notes_with_tags "$root")
 
     if should_create "$create_on_enter"; then
         # Create — but reuse an existing same-basename note before writing.
