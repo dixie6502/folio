@@ -165,8 +165,11 @@ note_switch() {
     fi
     [ -n "$query" ] && args+=(-q "$query")
 
-    local out rc typed key="" selected
-    out=$(notes_with_tags "$home" | fzf "${args[@]}"); rc=$?
+    # Built once: fzf shows it and the create path searches it. awk prints only
+    # at the end, so buffering it here delays nothing.
+    local listing out rc typed key="" selected
+    listing=$(notes_with_tags "$home")
+    out=$(printf '%s' "$listing" | fzf "${args[@]}"); rc=$?
     [ "$rc" != 2 ] || die "fzf failed"
     # fzf prints the query first (--print-query), then a key line only when
     # --expect is set, then the "<display>\t<path>" selection.
@@ -184,7 +187,7 @@ note_switch() {
             || die "not a listable note path (no part empty or starting with '_' or '.'): $base"
         # Reuse an existing note whose path differs only in case, so a
         # capitalisation slip never forks the namespace.
-        target=$(list_notes "$home" | grep -iFxm1 -- "$home/$base")
+        target=$(printf '%s\n' "$listing" | cut -d$'\t' -f2- | grep -iFxm1 -- "$home/$base")
         if [ -z "$target" ]; then
             target="$home/$base"
             # The editor writes the file on save; it cannot make the folder.
