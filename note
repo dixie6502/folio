@@ -11,8 +11,8 @@
 
 # Editor for opening/creating notes; honors $EDITOR (may include flags, e.g.
 # "code -w"; split on whitespace), defaults to vim.
-read -ra EDITOR_CMD <<< "${EDITOR:-vim}"
-[ ${#EDITOR_CMD[@]} -gt 0 ] || EDITOR_CMD=(vim)  # whitespace-only $EDITOR
+read -ra EDITOR_CMD <<< "${EDITOR-}"
+[ ${#EDITOR_CMD[@]} -gt 0 ] || EDITOR_CMD=(vim)  # unset, empty or whitespace-only
 readonly EDITOR_CMD
 
 # Print a message to stderr and exit non-zero.
@@ -34,15 +34,16 @@ list_notes() { rg --files --sort path "${NOTE_FILTER[@]}" "$1"; }
 is_listable_path() {
     local part parts
     IFS=/ read -ra parts <<< "$1"
-    [[ "$1" != /* && "$1" != */ && ${#parts[@]} -gt 0 ]] || return 1
+    [[ "$1" != */ && ${#parts[@]} -gt 0 ]] || return 1
     for part in "${parts[@]}"; do
         [[ -n "$part" && "$part" != [_.]* ]] || return 1
     done
 }
 
 # A '#word' tag: preceded by start-of-line or whitespace so markdown headings
-# ('# Title') and URL fragments ('foo#bar') never match.
-readonly TAG_RE='(^|[[:space:]])#[A-Za-z][A-Za-z0-9_/-]*'
+# ('# Title') and URL fragments ('foo#bar') never match. Group 1 is the tag
+# alone, which rg prints via -r '$1'.
+readonly TAG_RE='(?:^|[[:space:]])(#[A-Za-z][A-Za-z0-9_/-]*)'
 # Byte rg puts between a matched file's path and the tag, and that awk splits
 # on. US (0x1F) can never appear in a path or tag, so the split is always safe.
 readonly TAG_FIELD_SEP=$'\x1f'
@@ -53,13 +54,10 @@ readonly MAX_NAME_WIDTH=50
 
 # List notes in a folder as two tab-separated columns for the switcher:
 #   <padded name + colored #tags>\t<file path>
-# fzf (with --ansi) shows and searches field 1; note_switch strips the
-# selection back to field 2. A single rg pass collects every tag with its file;
-# awk aggregates them per note (deduped, in document order) and left-joins the
-# full note list so tag-less notes still appear. Doing this in awk — rather
-# than a shell loop that spawns rg per file — keeps the switcher fast on large
-# folders. The name column is padded to the widest name (capped) so tags line
-# up.
+# A single rg pass collects every tag with its file; awk aggregates them per
+# note (deduped, in document order) and left-joins the full note list so
+# tag-less notes still appear. Doing this in awk — rather than a shell loop
+# that spawns rg per file — keeps the switcher fast on large folders.
 notes_with_tags() {
     local root="$1"
     awk -F"$TAG_FIELD_SEP" -v root="$root/" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
@@ -77,7 +75,7 @@ notes_with_tags() {
         }
         # Second input (rg "path<US>#tag" matches): collect deduped tags per note.
         {
-            file = $1; tag = $2; gsub(/[ \t]/, "", tag)
+            file = $1; tag = $2
             if (!((file SUBSEP tag) in seen)) {
                 seen[file SUBSEP tag] = 1
                 tags[file] = tags[file] (tags[file] ? " " : "") tag
@@ -93,7 +91,7 @@ notes_with_tags() {
         }
     ' <(list_notes "$root") \
       <(rg -o -N --no-heading --color=never --field-match-separator "$TAG_FIELD_SEP" \
-            "$TAG_RE" "${NOTE_FILTER[@]}" "$root")
+            -r '$1' "$TAG_RE" "${NOTE_FILTER[@]}" "$root")
 }
 
 show_help() {
@@ -130,12 +128,11 @@ ENVIRONMENT
 EOF
 }
 
-# note [-c] [<query>] — notational-velocity switcher: open a note, or create
-# the typed name. The two modes have exactly one create key each, never both:
-# default binds ctrl-n via --expect; -c omits --expect so enter on no match
-# (fzf exit 1) is the only create path. Esc (130) never creates, so an aborted
-# picker cannot fork the namespace by accident.
+# note_switch <home> [-c] [<query>] — open a note or create the typed name (see
+# show_help). Default mode creates only via --expect=ctrl-n; -c omits --expect,
+# so fzf exit 1 (enter on no match) is the create path. Esc (130) never creates.
 note_switch() {
+    local home="$1"; shift
     local query="" create_on_enter=0
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -149,6 +146,7 @@ note_switch() {
     done
 
     # Show/search only the display field and interpret its color codes.
+    # (--accept-nth would drop the display field itself, but needs fzf 0.60+.)
     local args=(-e --height '~40%' --layout=reverse --print-query
                 --ansi --delimiter=$'\t' --with-nth=1 --nth=1)
     if [ "$create_on_enter" = 1 ]; then
@@ -162,11 +160,11 @@ note_switch() {
     out=$(notes_with_tags "$home" | fzf "${args[@]}"); rc=$?
     # fzf prints the query first (--print-query), then a key line only when
     # --expect is set, then the "<display>\t<path>" selection.
-    if [ "$create_on_enter" = 1 ]; then
-        { IFS= read -r typed; IFS= read -r selected; } <<< "$out"
-    else
-        { IFS= read -r typed; IFS= read -r key; IFS= read -r selected; } <<< "$out"
-    fi
+    {
+        IFS= read -r typed
+        [ "$create_on_enter" = 1 ] || IFS= read -r key
+        IFS= read -r selected
+    } <<< "$out"
     selected="${selected#*$'\t'}"
 
     if [ "$key" = ctrl-n ] || { [ "$create_on_enter" = 1 ] && [ "$rc" = 1 ]; }; then
@@ -189,7 +187,7 @@ note_switch() {
 }
 
 main() {
-    home="${NOTE_HOME:-$HOME/notes}"
+    local home="${NOTE_HOME:-$HOME/notes}"
     home="${home%/}"  # match rg's paths, which never carry a doubled slash
 
     case "$1" in
@@ -197,7 +195,7 @@ main() {
             show_help ;;
         *)
             [ -d "$home" ] || die "notes folder not found: $home (set NOTE_HOME)"
-            note_switch "$@" ;;  # bare default, incl. no args
+            note_switch "$home" "$@" ;;  # bare default, incl. no args
     esac
 }
 
