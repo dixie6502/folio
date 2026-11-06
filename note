@@ -40,21 +40,6 @@ is_listable_path() {
     done
 }
 
-# Template for new notes: copied on create with {{title}} (the note's file
-# name without .md) and {{date}} (YYYY-MM-DD) filled in. Absent = empty note.
-readonly TEMPLATE_NAME=_template.md
-
-# Write a new note at $1 from the template in $2.
-write_from_template() {
-    local path="$1" template="$2" title content
-    title="${path##*/}"; title="${title%.md}"
-    content=$(<"$template") || die "cannot read template: $template"
-    # Quoted replacements are literal, so '&' or '\' in a title stay as typed.
-    content="${content//"{{title}}"/"$title"}"
-    content="${content//"{{date}}"/"$(date +%F)"}"
-    printf '%s\n' "$content" > "$path" || die "cannot write: $path"
-}
-
 # A '#word' tag: preceded by start-of-line or whitespace so markdown headings
 # ('# Title') and URL fragments ('foo#bar') never match.
 readonly TAG_RE='(^|[[:space:]])#[A-Za-z][A-Za-z0-9_/-]*'
@@ -134,10 +119,6 @@ FLAGS
                                capture). An over-filtered (empty) list creates
                                your raw query, so use it knowingly.
 
-TEMPLATE
-    $NOTE_HOME/_template.md, if present, seeds new notes; {{title}} and
-    {{date}} are filled in.
-
 TAGS
     '#word' tags in a note are listed next to its name and searchable: type
     #moc to filter to notes tagged #moc.
@@ -198,9 +179,8 @@ note_switch() {
         target=$(list_notes "$home" | grep -iFxm1 -- "$home/$base")
         if [ -z "$target" ]; then
             target="$home/$base"
+            # The editor writes the file on save; it cannot make the folder.
             mkdir -p "${target%/*}" || die "cannot create folder: ${target%/*}"
-            local template="$home/$TEMPLATE_NAME"
-            [ -f "$template" ] && write_from_template "$target" "$template"
         fi
         "${EDITOR_CMD[@]}" "$target"
     elif [ "$rc" = 0 ] && [ -n "$selected" ]; then
