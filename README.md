@@ -1,9 +1,9 @@
 # note
 
-A notational-velocity switcher over a flat folder of plain-markdown notes.
-No notebooks, no nesting: every note lives directly in `$NOTE_HOME`, and
-structure comes from `#tags` you define inside the notes (e.g. `#moc` for a
-map of content). Edit with vim + the wikijump.vim plugin.
+A notational-velocity switcher over a folder of plain-markdown notes.
+No notebooks: notes live under `$NOTE_HOME` (subfolders allowed), and
+structure comes mainly from `#tags` you define inside the notes (e.g. `#moc`
+for a map of content). Edit with vim + the wikijump.vim plugin.
 
 ## Usage
 
@@ -13,8 +13,8 @@ note [-c] [<query>]
 
 Filter as you type; **Enter** opens the highlighted match in `$EDITOR`,
 **Ctrl-N** creates a note named by your query (`.md` is added
-automatically). Near-matches stay visible, so a typo never silently forks
-the namespace. Creating reuses an existing note whose name differs only in
+automatically; `work/idea` creates `work/idea.md`, making the folder). Near-matches stay visible, so a typo never silently forks
+the namespace. Creating reuses an existing note whose path differs only in
 case.
 
 Pass `-c`/`--create-on-enter` to let **Enter** also create when nothing
@@ -30,6 +30,59 @@ type `#moc` to list only notes tagged `#moc`. Matching is by substring, so
 `#moc` also matches `#mocha`. Markdown headings (`# Title`) and URL
 fragments (`foo#bar`) are not tags.
 
+### Template
+
+If `$NOTE_HOME/_template.md` exists, new notes start as a copy of it with
+these placeholders filled in:
+
+| Placeholder | Value |
+|---|---|
+| `{{title}}` | note name without folder and `.md` |
+| `{{date}}` | `2026-11-06` |
+
+Without a template, nothing is written until you save in the editor.
+
+Example with creation and update stamps:
+
+```markdown
+---
+creation:
+update:
+---
+
+# {{title}}
+```
+
+`note` only runs before the editor opens, so the stamps are vim's job. Add
+this to your vimrc. On every save that changes a note under `$NOTE_HOME`
+(subfolders included), it fills an empty `creation:` once and refreshes
+`update:`, inside front matter that starts on line 1. `NOTE_HOME` must be
+exported in the shell vim starts from.
+
+```vim
+function! s:NoteStamp() abort
+  if !&modified || getline(1) !~# '^---\s*$' | return | endif
+  let l:end = 0
+  for l:lnum in range(2, min([line('$'), 50]))
+    if getline(l:lnum) =~# '^---\s*$' | let l:end = l:lnum | break | endif
+  endfor
+  if l:end == 0 | return | endif
+  let l:stamp = strftime('%Y-%m-%dT%H:%M:%S%z')
+  for l:lnum in range(2, l:end - 1)
+    if getline(l:lnum) =~# '^creation:\s*$'
+      call setline(l:lnum, 'creation: ' . l:stamp)
+    elseif getline(l:lnum) =~# '^update:'
+      call setline(l:lnum, 'update: ' . l:stamp)
+    endif
+  endfor
+endfunction
+
+augroup note_stamps
+  autocmd!
+  autocmd BufWritePre $NOTE_HOME/*.md call s:NoteStamp()
+augroup END
+```
+
 ## Install
 
 Symlink `note` into your `$PATH`. For wikijump.vim, create its root marker
@@ -40,8 +93,9 @@ Requires [`fzf`](https://github.com/junegunn/fzf) and
 
 ## Environment
 
-- `NOTE_HOME` — notes folder (default: `~/notes`). Only `*.md` files at its
-  top level are read; subfolders and `_`-prefixed files are ignored.
+- `NOTE_HOME` — notes folder (default: `~/notes`). Only `*.md` files are
+  read, in subfolders too; files and folders starting with `_` or `.` are
+  skipped (as are files your `.gitignore` excludes).
 - `EDITOR` — editor for opening/creating notes (default: `vim`; may
   include flags, e.g. `code -w`).
 

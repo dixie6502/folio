@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# note - notational-velocity switcher over a flat folder of markdown notes
+# note - notational-velocity switcher over a folder of markdown notes
 #
-# Standalone script; symlink into $PATH. Notes are the markdown files directly
-# in $NOTE_HOME — no subfolders, no notebooks. Structure comes from '#tags'
-# inside the notes (e.g. #moc), which the switcher shows and searches.
+# Standalone script; symlink into $PATH. Notes are the markdown files under
+# $NOTE_HOME; files and folders whose name starts with '_' or '.' are skipped.
+# Structure comes from '#tags' inside the notes (e.g. #moc), which the switcher
+# shows and searches.
 #
 #   note [-c] [<query>]   filter notes, open the pick in $EDITOR or create one
 
@@ -18,17 +19,41 @@ readonly EDITOR_CMD
 die() { echo "$*" >&2; exit 1; }
 
 # Filter selecting note files: *.md only (the suffix the switcher hides and
-# adds on create), top level only (flat), excluding _-prefixed. Shared by the
-# file listing and the tag scan so both see exactly the same set of notes.
-readonly NOTE_FILTER=(--max-depth 1 --glob '*.md' --glob '!_*')
+# adds on create), skipping any file or folder named _* (rg already skips
+# hidden ones). Shared by the file listing and the tag scan so both see exactly
+# the same set of notes.
+readonly NOTE_FILTER=(--glob '*.md' --glob '!_*')
 
 # List note files in a folder, sorted so the switcher order is stable.
 list_notes() { rg --files --sort path "${NOTE_FILTER[@]}" "$1"; }
 
-# True when a new note's file name would be listed by NOTE_FILTER (top level,
-# not _-prefixed) and not hidden. rg's ignore files (.gitignore etc.) can still
-# hide a note; that is left to the user.
-is_listable_name() { [[ "$1" != */* && "$1" != [_.]* ]]; }
+# True when a new note's relative path would be listed by NOTE_FILTER: no part
+# empty or starting with '_' or '.' (which also rules out '..' and absolute
+# paths). rg's ignore files (.gitignore etc.) can still hide a note; that is
+# left to the user.
+is_listable_path() {
+    local part parts
+    IFS=/ read -ra parts <<< "$1"
+    [[ "$1" != /* && "$1" != */ && ${#parts[@]} -gt 0 ]] || return 1
+    for part in "${parts[@]}"; do
+        [[ -n "$part" && "$part" != [_.]* ]] || return 1
+    done
+}
+
+# Template for new notes: copied on create with {{title}} (the note's file
+# name without .md) and {{date}} (YYYY-MM-DD) filled in. Absent = empty note.
+readonly TEMPLATE_NAME=_template.md
+
+# Write a new note at $1 from the template in $2.
+write_from_template() {
+    local path="$1" template="$2" title content
+    title="${path##*/}"; title="${title%.md}"
+    content=$(<"$template") || die "cannot read template: $template"
+    # Quoted replacements are literal, so '&' or '\' in a title stay as typed.
+    content="${content//"{{title}}"/"$title"}"
+    content="${content//"{{date}}"/"$(date +%F)"}"
+    printf '%s\n' "$content" > "$path" || die "cannot write: $path"
+}
 
 # A '#word' tag: preceded by start-of-line or whitespace so markdown headings
 # ('# Title') and URL fragments ('foo#bar') never match.
@@ -52,11 +77,15 @@ readonly MAX_NAME_WIDTH=50
 # up.
 notes_with_tags() {
     local root="$1"
-    awk -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+    awk -F"$TAG_FIELD_SEP" -v root="$root/" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
         -v cap="$MAX_NAME_WIDTH" '
         # First input (note list): record each note in order, track widest name.
         FNR == NR {
-            name = $0; sub(/.*\//, "", name); sub(/\.md$/, "", name)
+            # Relative path without .md; index/substr, not sub(), so regex
+            # characters in the folder path are taken literally.
+            name = $0
+            if (index(name, root) == 1) name = substr(name, length(root) + 1)
+            sub(/\.md$/, "", name)
             order[++n] = $0; nameof[$0] = name
             if (length(name) > width) width = length(name)
             next
@@ -84,11 +113,12 @@ notes_with_tags() {
 
 show_help() {
     cat <<'EOF'
-note - notational-velocity switcher over a flat folder of markdown notes
+note - notational-velocity switcher over a folder of markdown notes
 
 USAGE
     note [-c] [<query>]      filter notes, open the pick or create the typed
-                               name; .md is implicit (never typed, never shown)
+                               name; .md is implicit (never typed, never shown);
+                               type folder/name to create in a subfolder
     note help                show this message
 
 KEYS
@@ -104,12 +134,17 @@ FLAGS
                                capture). An over-filtered (empty) list creates
                                your raw query, so use it knowingly.
 
+TEMPLATE
+    $NOTE_HOME/_template.md, if present, seeds new notes; {{title}} and
+    {{date}} are filled in.
+
 TAGS
     '#word' tags in a note are listed next to its name and searchable: type
     #moc to filter to notes tagged #moc.
 
 ENVIRONMENT
-    NOTE_HOME       notes folder, flat (default: ~/notes)
+    NOTE_HOME       notes folder (default: ~/notes); _* and .* files and
+                      folders are skipped
     EDITOR          editor for notes (default: vim)
 EOF
 }
@@ -155,12 +190,19 @@ note_switch() {
 
     if [ "$key" = ctrl-n ] || { [ "$create_on_enter" = 1 ] && [ "$rc" = 1 ]; }; then
         [ -n "$typed" ] || exit 0
-        local base="${typed%.md}.md" existing
-        is_listable_name "$base" || die "not a listable note name (no '/', no leading '_' or '.'): $base"
-        # Reuse an existing note whose name differs only in case, so a
+        local base="${typed%.md}.md" target
+        is_listable_path "$base" \
+            || die "not a listable note path (no part empty or starting with '_' or '.'): $base"
+        # Reuse an existing note whose path differs only in case, so a
         # capitalisation slip never forks the namespace.
-        existing=$(list_notes "$home" | grep -iFxm1 -- "$home/$base")
-        "${EDITOR_CMD[@]}" "${existing:-$home/$base}"
+        target=$(list_notes "$home" | grep -iFxm1 -- "$home/$base")
+        if [ -z "$target" ]; then
+            target="$home/$base"
+            mkdir -p "${target%/*}" || die "cannot create folder: ${target%/*}"
+            local template="$home/$TEMPLATE_NAME"
+            [ -f "$template" ] && write_from_template "$target" "$template"
+        fi
+        "${EDITOR_CMD[@]}" "$target"
     elif [ "$rc" = 0 ] && [ -n "$selected" ]; then
         "${EDITOR_CMD[@]}" "$selected"
     fi
