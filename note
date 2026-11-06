@@ -44,8 +44,8 @@ is_listable_path() {
 # ('# Title') and URL fragments ('foo#bar') never match. Group 1 is the tag
 # alone, which rg prints via -r '$1'.
 readonly TAG_RE='(?:^|[[:space:]])(#[A-Za-z][A-Za-z0-9_/-]*)'
-# Byte rg puts between a matched file's path and the tag, and that awk splits
-# on. US (0x1F) can never appear in a path or tag, so the split is always safe.
+# Byte rg puts between a matched file's path and the tag. A tag never contains
+# US (0x1F) but a path may, so awk splits on the last one.
 readonly TAG_FIELD_SEP=$'\x1f'
 # Dim cyan so tags read as secondary next to the note name (needs fzf --ansi).
 readonly TAG_COLOR=$'\033[2;36m' TAG_RESET=$'\033[0m'
@@ -60,22 +60,27 @@ readonly MAX_NAME_WIDTH=50
 # that spawns rg per file — keeps the switcher fast on large folders.
 notes_with_tags() {
     local root="$1"
-    awk -F"$TAG_FIELD_SEP" -v root="$root/" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+    # The root goes in through ENVIRON, not -v, which would expand backslashes.
+    # shellcheck disable=SC2016  # the $ fields belong to the awk program
+    NOTE_ROOT="$root/" awk -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
         -v cap="$MAX_NAME_WIDTH" '
+        BEGIN { root = ENVIRON["NOTE_ROOT"] }
         # First input (note list): record each note in order, track widest name.
         FNR == NR {
             # Relative path without .md; index/substr, not sub(), so regex
-            # characters in the folder path are taken literally.
+            # characters in the folder path are taken literally. Tabs become
+            # spaces so the display field never contains the field delimiter.
             name = $0
             if (index(name, root) == 1) name = substr(name, length(root) + 1)
             sub(/\.md$/, "", name)
+            gsub(/\t/, " ", name)
             order[++n] = $0; nameof[$0] = name
             if (length(name) > width) width = length(name)
             next
         }
         # Second input (rg "path<US>#tag" matches): collect deduped tags per note.
         {
-            file = $1; tag = $2
+            tag = $NF; file = substr($0, 1, length($0) - length(tag) - 1)
             if (!((file SUBSEP tag) in seen)) {
                 seen[file SUBSEP tag] = 1
                 tags[file] = tags[file] (tags[file] ? " " : "") tag
@@ -166,7 +171,7 @@ note_switch() {
         [ "$create_on_enter" = 1 ] || IFS= read -r key
         IFS= read -r selected
     } <<< "$out"
-    selected="${selected#*$'\t'}"
+    selected="${selected#*$'\t'}"  # first tab: the display field has none
 
     if [ "$key" = ctrl-n ] || { [ "$create_on_enter" = 1 ] && [ "$rc" = 1 ]; }; then
         [ -n "$typed" ] || exit 0
