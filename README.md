@@ -30,87 +30,18 @@ type `#moc` to list only notes tagged `#moc`. Matching is by substring, so
 `#moc` also matches `#mocha`. Markdown headings (`# Title`) and URL
 fragments (`foo#bar`) are not tags.
 
-### Template and timestamps (vim)
+### Dates
 
-`note` only opens the editor; templates and timestamps live in vim, so they
-also apply to notes you create by following a link. Add this to your vimrc:
+`note` stores no dates. The filesystem records when a note was created and
+last changed:
 
-- **Template:** a new note under `$NOTE_HOME` starts as a copy of
-  `$NOTE_HOME/_template.md` (if present), with `{{title}}` (file name
-  without `.md`) and `{{date}}` (`2026-11-06`) filled in. Nothing is
-  written until you save.
-- **Stamps:** on a save that changes a note (or writes it for the first
-  time), an empty `creation:` is filled once and `update:` is refreshed,
-  inside front matter starting with `---` on line 1.
-- Files and folders starting with `_` or `.` (including the template) are
-  left alone. `NOTE_HOME` must be exported in the shell vim starts from.
-
-Example `_template.md`:
-
-```markdown
----
-creation:
-update:
----
-
-# {{title}}
+```bash
+stat -c 'created %w | updated %y' "$NOTE_HOME/foo.md"
 ```
 
-```vim
-" Notes under $NOTE_HOME: fill new ones from _template.md, and stamp
-" creation:/update: in their front matter on save.
-
-" True for a note under $NOTE_HOME whose path has no _* or .* part.
-function! s:IsNote(path) abort
-  if empty($NOTE_HOME) | return 0 | endif
-  let l:home = fnamemodify($NOTE_HOME, ':p')
-  let l:path = fnamemodify(a:path, ':p')
-  if stridx(l:path, l:home) != 0 | return 0 | endif
-  return l:path[len(l:home):] !~# '\v(^|/)[_.]'
-endfunction
-
-" Fill a new note from the template; {{title}} and {{date}} are replaced.
-function! s:NoteTemplate() abort
-  let l:template = $NOTE_HOME . '/_template.md'
-  if !s:IsNote(expand('<afile>')) || !filereadable(l:template) | return | endif
-  let l:title = expand('<afile>:t:r')
-  let l:date = strftime('%Y-%m-%d')
-  let l:lines = []
-  for l:line in readfile(l:template)
-    let l:line = join(split(l:line, '{{title}}', 1), l:title)
-    call add(l:lines, join(split(l:line, '{{date}}', 1), l:date))
-  endfor
-  call setline(1, l:lines)
-  setlocal nomodified
-endfunction
-
-" Fill an empty creation: once and refresh update: on a save that changes
-" the note (or writes it for the first time).
-function! s:NoteStamp() abort
-  let l:file = expand('<afile>')
-  if !s:IsNote(l:file) || (!&modified && filereadable(l:file)) | return | endif
-  if getline(1) !~# '^---\s*$' | return | endif
-  let l:end = 0
-  for l:lnum in range(2, min([line('$'), 50]))
-    if getline(l:lnum) =~# '^---\s*$' | let l:end = l:lnum | break | endif
-  endfor
-  if l:end == 0 | return | endif
-  let l:stamp = strftime('%Y-%m-%dT%H:%M:%S%z')
-  for l:lnum in range(2, l:end - 1)
-    if getline(l:lnum) =~# '^creation:\s*$'
-      call setline(l:lnum, 'creation: ' . l:stamp)
-    elseif getline(l:lnum) =~# '^update:'
-      call setline(l:lnum, 'update: ' . l:stamp)
-    endif
-  endfor
-endfunction
-
-augroup note
-  autocmd!
-  autocmd BufNewFile $NOTE_HOME/*.md call s:NoteTemplate()
-  autocmd BufWritePre $NOTE_HOME/*.md call s:NoteStamp()
-augroup END
-```
+Vim keeps the creation time only with `set backupcopy=yes` (with the default
+`auto` it usually writes a new file on each save, resetting it). Copying,
+restoring or syncing notes usually resets both dates.
 
 ## Install
 
