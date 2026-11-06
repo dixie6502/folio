@@ -49,7 +49,9 @@ Symlink `note` into your `$PATH`. For wikijump.vim, create its root marker
 once: `touch "${NOTE_HOME:-$HOME/notes}/.wikijump"`.
 
 Requires [`fzf`](https://github.com/junegunn/fzf) and
-[`ripgrep`](https://github.com/BurntSushi/ripgrep).
+[`ripgrep`](https://github.com/BurntSushi/ripgrep). Uses `gawk` when
+installed so tags line up after non-ASCII note names; any other `awk` works
+but may misalign them.
 
 ## Environment
 

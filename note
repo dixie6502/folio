@@ -47,6 +47,10 @@ readonly TAG_RE='(?:^|[[:space:]])(#[A-Za-z][A-Za-z0-9_/-]*)'
 # Byte rg puts between a matched file's path and the tag. A tag never contains
 # US (0x1F) but a path may, so awk splits on the last one.
 readonly TAG_FIELD_SEP=$'\x1f'
+# awk for the listing: gawk counts characters (not bytes) in a UTF-8 locale, so
+# names with accents still line up; other awks (mawk) work but may misalign.
+AWK_CMD=$(command -v gawk || command -v awk) || die "awk not found"
+readonly AWK_CMD
 # Dim cyan so tags read as secondary next to the note name (needs fzf --ansi).
 readonly TAG_COLOR=$'\033[2;36m' TAG_RESET=$'\033[0m'
 # Cap the note-name column so one long name can't push every tag off-screen.
@@ -62,7 +66,7 @@ notes_with_tags() {
     local root="$1"
     # The root goes in through ENVIRON, not -v, which would expand backslashes.
     # shellcheck disable=SC2016  # the $ fields belong to the awk program
-    NOTE_ROOT="$root/" awk -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+    NOTE_ROOT="$root/" "$AWK_CMD" -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
         -v cap="$MAX_NAME_WIDTH" '
         BEGIN { root = ENVIRON["NOTE_ROOT"] }
         # First input (note list): record each note in order, track widest name.
