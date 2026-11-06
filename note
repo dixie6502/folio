@@ -1,50 +1,34 @@
 #!/usr/bin/env bash
 #
-# note - notebook manager
+# note - notational-velocity switcher over a flat folder of markdown notes
 #
-# Standalone script; symlink into $PATH. Owns cross-notebook ops only —
-# inside a notebook, use vim + wikijump.vim plugin. All commands operate
-# relative to $NOTE_HOME.
+# Standalone script; symlink into $PATH. Notes are the markdown files directly
+# in $NOTE_HOME — no subfolders, no notebooks. Structure comes from '#tags'
+# inside the notes (e.g. #moc), which the switcher shows and searches.
 #
-# Two notational-velocity switchers (filter as you type; enter opens,
-# ctrl-n creates the typed name; -c swaps that for enter-creates-on-no-match
-# and drops ctrl-n, so only one create key is ever live) plus shell
-# integration:
-#   note [<query>]        note switcher  -> opens $EDITOR
-#   note book [<query>]   notebook switcher -> prints a path (compose: nb)
-#   note init <shell>     emit `nb` + completion for eval
-#
-# No command mutates the parent shell; `init` only prints code for the
-# user's `eval` to define. cd happens through the `nb` function.
-
-# Notebooks are the directories directly under $NOTE_HOME — flat, no nesting,
-# no marker needed to identify one. note reads the current notebook from $PWD.
-
-# Files touched when `book` creates a notebook. `.wikijump` is scaffolded so
-# the wikijump.vim plugin can find the notebook root by walking up while you
-# edit; note itself does not read it. Append your own, e.g. README.md.
-readonly NEW_NOTEBOOK_FILES=(".wikijump")
+#   note [-c] [<query>]   filter notes, open the pick in $EDITOR or create one
 
 # Editor for opening/creating notes; honors $EDITOR (may include flags, e.g.
-# "code -w"), defaults to vim.
-readonly EDITOR_CMD=("${EDITOR:-vim}")
-
-# Command run inside a freshly created notebook (only on creation, never when
-# selecting an existing one). Lets a new notebook drop you straight into an
-# editor. Empty array disables the hook. It runs with the new notebook as cwd
-# and its terminal I/O is bound to /dev/tty, so it works even when `nb` runs
-# `note book` inside $(...) and captures this script's stdout for the cd.
-readonly NEW_NOTEBOOK_CMD=("${EDITOR_CMD[@]}" README.md)
+# "code -w"; split on whitespace), defaults to vim.
+read -ra EDITOR_CMD <<< "${EDITOR:-vim}"
+[ ${#EDITOR_CMD[@]} -gt 0 ] || EDITOR_CMD=(vim)  # whitespace-only $EDITOR
+readonly EDITOR_CMD
 
 # Print a message to stderr and exit non-zero.
 die() { echo "$*" >&2; exit 1; }
 
-# Filter selecting note files: markdown, excluding _-prefixed. Shared by the
+# Filter selecting note files: *.md only (the suffix the switcher hides and
+# adds on create), top level only (flat), excluding _-prefixed. Shared by the
 # file listing and the tag scan so both see exactly the same set of notes.
-readonly NOTE_FILTER=(--type md --glob '!_*')
+readonly NOTE_FILTER=(--max-depth 1 --glob '*.md' --glob '!_*')
 
-# List note files beneath a root.
-list_notes() { rg --files "${NOTE_FILTER[@]}" "$1"; }
+# List note files in a folder, sorted so the switcher order is stable.
+list_notes() { rg --files --sort path "${NOTE_FILTER[@]}" "$1"; }
+
+# True when a new note's file name would be listed by NOTE_FILTER (top level,
+# not _-prefixed) and not hidden. rg's ignore files (.gitignore etc.) can still
+# hide a note; that is left to the user.
+is_listable_name() { [[ "$1" != */* && "$1" != [_.]* ]]; }
 
 # A '#word' tag: preceded by start-of-line or whitespace so markdown headings
 # ('# Title') and URL fragments ('foo#bar') never match.
@@ -57,25 +41,24 @@ readonly TAG_COLOR=$'\033[2;36m' TAG_RESET=$'\033[0m'
 # Cap the note-name column so one long name can't push every tag off-screen.
 readonly MAX_NAME_WIDTH=50
 
-# List notes beneath a root as two tab-separated columns for the switcher:
-#   <padded name + colored #tags>\t<clean relative path>
-# fzf (with --ansi) shows and searches field 1; nv_pick recovers field 2 as the
-# value. A single rg pass collects every tag with its file; awk aggregates them
-# per note (deduped, in document order) and left-joins the full note list so
-# tag-less notes still appear. Doing this in awk — rather than a shell loop that
-# spawns rg per file — keeps the switcher fast on large notebooks. The name
-# column is padded to the widest name (capped) so tags line up. rg joins each
-# match to its file with a US byte (0x1F), which can't occur in a path, so awk
-# splits the two apart cleanly whatever characters a note name contains.
+# List notes in a folder as two tab-separated columns for the switcher:
+#   <padded name + colored #tags>\t<file path>
+# fzf (with --ansi) shows and searches field 1; note_switch strips the
+# selection back to field 2. A single rg pass collects every tag with its file;
+# awk aggregates them per note (deduped, in document order) and left-joins the
+# full note list so tag-less notes still appear. Doing this in awk — rather
+# than a shell loop that spawns rg per file — keeps the switcher fast on large
+# folders. The name column is padded to the widest name (capped) so tags line
+# up.
 notes_with_tags() {
     local root="$1"
-    awk -F"$TAG_FIELD_SEP" -v root="$root/" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+    awk -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
         -v cap="$MAX_NAME_WIDTH" '
         # First input (note list): record each note in order, track widest name.
         FNR == NR {
-            rel = $0; sub("^" root, "", rel); sub(/\.md$/, "", rel)
-            order[++n] = $0; relof[$0] = rel
-            if (length(rel) > width) width = length(rel)
+            name = $0; sub(/.*\//, "", name); sub(/\.md$/, "", name)
+            order[++n] = $0; nameof[$0] = name
+            if (length(name) > width) width = length(name)
             next
         }
         # Second input (rg "path<US>#tag" matches): collect deduped tags per note.
@@ -89,9 +72,9 @@ notes_with_tags() {
         END {
             if (width > cap) width = cap
             for (k = 1; k <= n; k++) {
-                file = order[k]; rel = relof[file]
+                file = order[k]
                 suffix = (tags[file] != "") ? "  " col tags[file] rst : ""
-                printf "%-*s%s\t%s\n", width, rel, suffix, rel
+                printf "%-*s%s\t%s\n", width, nameof[file], suffix, file
             }
         }
     ' <(list_notes "$root") \
@@ -101,99 +84,45 @@ notes_with_tags() {
 
 show_help() {
     cat <<'EOF'
-note - notebook manager
+note - notational-velocity switcher over a flat folder of markdown notes
 
 USAGE
-    note [<query>]           note switcher: filter notes, open or create
-    note <command> [args]
+    note [-c] [<query>]      filter notes, open the pick or create the typed
+                               name; .md is implicit (never typed, never shown)
+    note help                show this message
 
-COMMANDS
-    book [<query>]           notebook switcher: filter, select or create;
-                               prints the notebook path (compose: nb)
-    init <shell>             print shell integration (nb + completion)
-                               for eval; <shell> is bash or zsh
-    help                     show this message
-
-SWITCHER KEYS
+KEYS
     enter                    open the highlighted match (with -c, also create
                                the typed name when nothing matches)
-    ctrl-n                   create a note/notebook named by your query
-                               (default mode only; near-matches stay visible,
-                                so a typo never silently forks the namespace)
+    ctrl-n                   create a note named by your query (default mode
+                               only; near-matches stay visible, so a typo never
+                               silently forks the namespace)
 
-SWITCHER FLAGS
+FLAGS
     -c, --create-on-enter    make enter create on no match and drop ctrl-n, so
                                a single key both opens and creates (fast
-                               capture); applies to note and book. An
-                               over-filtered (empty) list creates your raw
-                               query, so use it knowingly.
+                               capture). An over-filtered (empty) list creates
+                               your raw query, so use it knowingly.
 
-NOTE SWITCHER SCOPE
-    -n, --notebook <nb>      restrict to notebook <nb>
-    (inside a notebook)      restrict to the current notebook
-    (otherwise)              search all of $NOTE_HOME; creating a new note
-                               then needs -n or a notebook as cwd
-    (.md is implicit)        notes list without the .md suffix and get it
-                               added on create, so you never type .md
-
-COMPOSE
-    Shell integration (add to your rc):
-        eval "$(note init bash)"
-    Defines nb() to cd into a notebook:
-        nb [<query>] — pick or create a notebook, then cd into it
+TAGS
+    '#word' tags in a note are listed next to its name and searchable: type
+    #moc to filter to notes tagged #moc.
 
 ENVIRONMENT
-    NOTE_HOME       notes root (default: ~/notes)
+    NOTE_HOME       notes folder, flat (default: ~/notes)
+    EDITOR          editor for notes (default: vim)
 EOF
 }
 
-# Notational-velocity picker over candidates on stdin.
-# Args: optional pre-fill query; create_on_enter ("1" makes enter the create
-# key and drops ctrl-n); columns ("1" enables tab-delimited display columns,
-# see below). Sets NV_QUERY, NV_KEY, NV_SEL, NV_RC.
-# The two modes have exactly one create key each, never both: default binds
-# ctrl-n via --expect; create_on_enter omits --expect so enter is the only
-# create path. Callers gate create on NV_KEY == ctrl-n, or — under
-# create_on_enter — on enter with no match (NV_RC == 1). Esc (130) never
-# creates, so an aborted picker cannot fork the namespace by accident.
-nv_pick() {
-    local q="$1" create_on_enter="$2" columns="$3" out
-    local args=(-e --height '~40%' --layout=reverse --print-query)
-    # Column mode: input is "<display>\t<value>"; show/search only the display
-    # field and interpret its color codes. NV_SEL gets the whole line; we strip
-    # it back to the value field below so callers see a clean value.
-    [ "$columns" = 1 ] && args+=(--ansi --delimiter=$'\t' --with-nth=1 --nth=1)
-    if [ "$create_on_enter" = 1 ]; then
-        args+=(--header 'enter: open/create')
-    else
-        args+=(--expect=ctrl-n --header 'enter: open   ctrl-n: create typed name')
-    fi
-    [ -n "$q" ] && args+=(-q "$q")
-    out=$(fzf "${args[@]}"); NV_RC=$?
-    # fzf prints the query first (--print-query), then a key line only when
-    # --expect is set, then the selection. Read without spawning subshells;
-    # in create_on_enter mode there is no key line, so clear NV_KEY ourselves.
-    if [ "$create_on_enter" = 1 ]; then
-        NV_KEY=""
-        { IFS= read -r NV_QUERY; IFS= read -r NV_SEL; } <<< "$out"
-    else
-        { IFS= read -r NV_QUERY; IFS= read -r NV_KEY; IFS= read -r NV_SEL; } <<< "$out"
-    fi
-    [ "$columns" = 1 ] && NV_SEL="${NV_SEL#*$'\t'}"
-}
-
-# True when the last nv_pick outcome means "create": explicit ctrl-n, or — when
-# the caller passes 1 — enter on no match (NV_RC == 1). Reads nv_pick's globals.
-should_create() { [ "$NV_KEY" = ctrl-n ] || { [ "$1" = 1 ] && [ "$NV_RC" = 1 ]; }; }
-
-# note [-n <nb>] [<query>] — open a note, or create it on ctrl-n.
+# note [-c] [<query>] — notational-velocity switcher: open a note, or create
+# the typed name. The two modes have exactly one create key each, never both:
+# default binds ctrl-n via --expect; -c omits --expect so enter on no match
+# (fzf exit 1) is the only create path. Esc (130) never creates, so an aborted
+# picker cannot fork the namespace by accident.
 note_switch() {
-    local notebook="" query="" create_on_enter=0
+    local query="" create_on_enter=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            -n|--notebook)
-                [ -n "$2" ] || die "missing notebook name"
-                notebook="$2"; shift 2 ;;
             -c|--create-on-enter)
                 create_on_enter=1; shift ;;
             -*) die "unknown flag: $1" ;;
@@ -203,136 +132,49 @@ note_switch() {
         esac
     done
 
-    # Resolve search root and whether a single notebook is in scope.
-    local root scoped=0
-    if [ -n "$notebook" ]; then
-        root="$home/$notebook"
-        [ -d "$root" ] || die "no notebook: $notebook"
-        scoped=1
-    elif [[ "$PWD" == "$home"/?* ]]; then
-        # inside $NOTE_HOME: the notebook is the first path component
-        local rel="${PWD#"$home"/}"
-        root="$home/${rel%%/*}"; scoped=1
+    # Show/search only the display field and interpret its color codes.
+    local args=(-e --height '~40%' --layout=reverse --print-query
+                --ansi --delimiter=$'\t' --with-nth=1 --nth=1)
+    if [ "$create_on_enter" = 1 ]; then
+        args+=(--header 'enter: open/create')
     else
-        root="$home"
+        args+=(--expect=ctrl-n --header 'enter: open   ctrl-n: create typed name')
     fi
+    [ -n "$query" ] && args+=(-q "$query")
 
-    # Process substitution (not a pipe) so nv_pick runs in this shell and
-    # its NV_* globals survive — a pipeline would subshell them away.
-    # notes_with_tags drops the .md suffix (re-added on open/create below) and
-    # carries the clean path in a hidden field; nv_pick's column mode returns it
-    # as NV_SEL.
-    nv_pick "$query" "$create_on_enter" 1 < <(notes_with_tags "$root")
-
-    if should_create "$create_on_enter"; then
-        # Create — but reuse an existing same-basename note before writing.
-        [ -n "$NV_QUERY" ] || exit 0
-        local base="${NV_QUERY%.md}.md" existing
-        existing=$(list_notes "$root" | grep -i "/${base}\$" | head -n1)
-        if [ -n "$existing" ]; then
-            "${EDITOR_CMD[@]}" "$existing"
-        elif [ "$scoped" = 1 ]; then
-            "${EDITOR_CMD[@]}" "$root/$base"
-        else
-            die "create needs a notebook: use -n <nb> or run inside one"
-        fi
-    elif [ "$NV_RC" = 0 ] && [ -n "$NV_SEL" ]; then
-        # Selection shows no .md; re-add it unless the path exists as displayed.
-        local target="$root/$NV_SEL"
-        [ -e "$target" ] || target="$target.md"
-        "${EDITOR_CMD[@]}" "$target"
+    local out rc typed key="" selected
+    out=$(notes_with_tags "$home" | fzf "${args[@]}"); rc=$?
+    # fzf prints the query first (--print-query), then a key line only when
+    # --expect is set, then the "<display>\t<path>" selection.
+    if [ "$create_on_enter" = 1 ]; then
+        { IFS= read -r typed; IFS= read -r selected; } <<< "$out"
+    else
+        { IFS= read -r typed; IFS= read -r key; IFS= read -r selected; } <<< "$out"
     fi
-}
+    selected="${selected#*$'\t'}"
 
-# note book [<query>] — print a notebook path; create it on ctrl-n.
-book_switch() {
-    local query="" create_on_enter=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -c|--create-on-enter) create_on_enter=1; shift ;;
-            -*) die "unknown flag: $1" ;;
-            *) [ -z "$query" ] || die "unexpected arg: $1"; query="$1"; shift ;;
-        esac
-    done
-
-    nv_pick "$query" "$create_on_enter" < <(find "$home" -mindepth 1 -maxdepth 1 -type d \
-                            -not -name '_*' -not -name '.*' -printf '%f\n')
-
-    if should_create "$create_on_enter"; then
-        [ -n "$NV_QUERY" ] || exit 0
-        local dst="$home/$NV_QUERY"
-        if [ -d "$dst" ]; then
-            :  # already a notebook — select it
-        elif [ -e "$dst" ]; then
-            die "exists (not a notebook): $dst"
-        else
-            mkdir -p "$dst" || die "cannot create: $dst"
-            for f in "${NEW_NOTEBOOK_FILES[@]}"; do
-                touch "$dst/$f" || die "cannot create: $dst/$f"
-            done
-            if [ ${#NEW_NOTEBOOK_CMD[@]} -gt 0 ]; then
-                # /dev/tty so an editor gets a real terminal even when nb has
-                # captured our stdout in $(...) for the cd.
-                ( cd "$dst" && "${NEW_NOTEBOOK_CMD[@]}" ) </dev/tty >/dev/tty 2>&1
-            fi
-        fi
-        echo "$dst"
-    elif [ "$NV_RC" = 0 ] && [ -n "$NV_SEL" ]; then
-        echo "$home/$NV_SEL"
+    if [ "$key" = ctrl-n ] || { [ "$create_on_enter" = 1 ] && [ "$rc" = 1 ]; }; then
+        [ -n "$typed" ] || exit 0
+        local base="${typed%.md}.md" existing
+        is_listable_name "$base" || die "not a listable note name (no '/', no leading '_' or '.'): $base"
+        # Reuse an existing note whose name differs only in case, so a
+        # capitalisation slip never forks the namespace.
+        existing=$(list_notes "$home" | grep -iFxm1 -- "$home/$base")
+        "${EDITOR_CMD[@]}" "${existing:-$home/$base}"
+    elif [ "$rc" = 0 ] && [ -n "$selected" ]; then
+        "${EDITOR_CMD[@]}" "$selected"
     fi
-}
-
-# note init <shell> — emit nb() + completion for `eval`.
-emit_init() {
-    local shell="${1:-bash}"
-    case "$shell" in
-        bash) ;;
-        zsh)  echo 'autoload -U +X bashcompinit && bashcompinit' ;;
-        *)    die "unknown shell: $shell (bash|zsh)" ;;
-    esac
-    cat <<'EOF'
-nb() { local d; d=$(note book "$@") && [ -n "$d" ] && cd "$d"; }
-
-_note() {
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    local home="${NOTE_HOME:-$HOME/notes}"
-
-    case "$prev" in
-        -n|--notebook)
-            COMPREPLY=($(cd "$home" 2>/dev/null && compgen -d -- "$cur"))
-            return ;;
-    esac
-    if [ "$COMP_CWORD" = 1 ]; then
-        COMPREPLY=($(compgen -W "book init help -n --notebook -c --create-on-enter" -- "$cur"))
-        return
-    fi
-    case "${COMP_WORDS[1]}" in
-        book)
-            [ "$COMP_CWORD" = 2 ] \
-                && COMPREPLY=($(cd "$home" 2>/dev/null && compgen -d -- "$cur"))
-            ;;
-        init)
-            [ "$COMP_CWORD" = 2 ] \
-                && COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
-            ;;
-    esac
-}
-complete -F _note note
-EOF
 }
 
 main() {
     home="${NOTE_HOME:-$HOME/notes}"
+    home="${home%/}"  # match rg's paths, which never carry a doubled slash
 
     case "$1" in
         -h|--help|help)
             show_help ;;
-        book)
-            shift; book_switch "$@" ;;
-        init)
-            shift; emit_init "$@" ;;
         *)
+            [ -d "$home" ] || die "notes folder not found: $home (set NOTE_HOME)"
             note_switch "$@" ;;  # bare default, incl. no args
     esac
 }

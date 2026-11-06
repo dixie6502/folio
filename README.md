@@ -1,74 +1,55 @@
-# nb
+# note
 
-A notebook manager over a tree of plain-markdown files. `note` owns
-cross-notebook navigation and creation; inside a notebook you edit with
-vim + the wikijump.vim plugin.
+A notational-velocity switcher over a flat folder of plain-markdown notes.
+No notebooks, no nesting: every note lives directly in `$NOTE_HOME`, and
+structure comes from `#tags` you define inside the notes (e.g. `#moc` for a
+map of content). Edit with vim + the wikijump.vim plugin.
 
-## Commands
+## Usage
 
-Two notational-velocity switchers (filter as you type; **Enter** opens the
-highlighted match, **Ctrl-N** creates a new one named by your query) plus
-shell integration. Pass `-c`/`--create-on-enter` to let **Enter** also
-create when nothing matches (fast capture); off by default. Matching is
-exact (each word a contiguous substring), not fuzzy.
+```
+note [-c] [<query>]
+```
 
-| Command | What it does |
-|---|---|
-| `note [<query>]` | **Note switcher.** Filter notes (shown without the `.md` suffix), open the pick in vim, or create the typed name — `.md` is added automatically. Near-matches stay visible, so a typo never silently forks the namespace. |
-| `note book [<query>]` | **Notebook switcher.** Filter notebooks, select or create one. Prints the notebook path (compose with `nb` to cd into it). |
-| `note init <shell>` | Print shell integration (`nb` + completion) for `eval`; `<shell>` is `bash` or `zsh`. |
-| `note help` | Usage. |
+Filter as you type; **Enter** opens the highlighted match in `$EDITOR`,
+**Ctrl-N** creates a note named by your query (`.md` is added
+automatically). Near-matches stay visible, so a typo never silently forks
+the namespace. Creating reuses an existing note whose name differs only in
+case.
 
-Bare `note` (no query) opens the switcher over every note — the primary
-"jump to anything" action.
+Pass `-c`/`--create-on-enter` to let **Enter** also create when nothing
+matches (fast capture); off by default. Matching is exact (each word a
+contiguous substring), not fuzzy.
 
-### Note switcher scope
+Bare `note` (no query) opens the switcher over every note.
 
-- `-n, --notebook <nb>` — restrict to notebook `<nb>`.
-- Inside a notebook (cwd under `$NOTE_HOME`) — restrict to the notebook
-  named by the first path component.
-- Otherwise — search all of `$NOTE_HOME`. Creating a *new* note then
-  requires `-n` or a notebook as cwd.
+### Tags
+
+Every `#word` tag in a note is shown next to its name and is searchable:
+type `#moc` to list only notes tagged `#moc`. Matching is by substring, so
+`#moc` also matches `#mocha`. Markdown headings (`# Title`) and URL
+fragments (`foo#bar`) are not tags.
 
 ## Install
 
-Symlink `note` into your `$PATH`, then add the shell integration to your
-rc file:
-
-```bash
-eval "$(note init bash)"      # or: note init zsh
-```
-
-This defines `nb`, the cd-wrapper around `note book` (a command cannot
-change the parent shell's directory, so the cd must run in a function):
-
-```bash
-nb [<query>]    # pick or create a notebook, then cd into it
-```
+Symlink `note` into your `$PATH`. For wikijump.vim, create its root marker
+once: `touch "${NOTE_HOME:-$HOME/notes}/.wikijump"`.
 
 Requires [`fzf`](https://github.com/junegunn/fzf) and
 [`ripgrep`](https://github.com/BurntSushi/ripgrep).
 
 ## Environment
 
-- `NOTE_HOME` — notes root (default: `~/notes`).
+- `NOTE_HOME` — notes folder (default: `~/notes`). Only `*.md` files at its
+  top level are read; subfolders and `_`-prefixed files are ignored.
 - `EDITOR` — editor for opening/creating notes (default: `vim`; may
   include flags, e.g. `code -w`).
-
-## Configuration
-
-Edit the constants near the top of `note`:
-
-- `NEW_NOTEBOOK_FILES` — files scaffolded into a new notebook (default:
-  `.wikijump`, the wikijump.vim root marker).
-- `NEW_NOTEBOOK_CMD` — command run inside a freshly created notebook
-  (default: open `README.md` in `$EDITOR`); empty array disables it.
 
 ## Plan
 
 Migrate `note` to a Go binary — motivated only by shedding the `fzf`/`rg`
-runtime dependency into one self-contained executable. The command set and
-UX above are unchanged by that migration.
+runtime dependency into one self-contained executable. The behaviour
+above is unchanged by that migration.
 
 ## Example
 
