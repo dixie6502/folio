@@ -158,6 +158,7 @@ note_switch() {
 
     local out rc typed key="" selected
     out=$(notes_with_tags "$home" | fzf "${args[@]}"); rc=$?
+    [ "$rc" != 2 ] || die "fzf failed"
     # fzf prints the query first (--print-query), then a key line only when
     # --expect is set, then the "<display>\t<path>" selection.
     {
