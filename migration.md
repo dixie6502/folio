@@ -48,7 +48,8 @@ not confused with the `todo` and `note` skills that use it.
   store is a notebook; `check` reports what lies outside them.
 - **Notebook key** of a folder:
   - inside a git repository with an `origin` remote: the path of origin's URL,
-    without host or `.git` suffix. Every URL form gives the same key:
+    without host or `.git` suffix, lowercased (forges ignore case in
+    owner/repo). Every URL form gives the same key:
 
     ```
     https://github.com/dixie6502/folio.git      → dixie6502/folio
@@ -61,8 +62,10 @@ not confused with the `todo` and `note` skills that use it.
     share a notebook, nested groups keep their parts (`group/sub/repo`), a fork
     has its own (its origin), and inside a submodule the submodule wins;
   - any other folder under `~` (a repository without `origin` included): its
-    path relative to `~`;
-  - outside `~`: none (refused).
+    path relative to `~`, physical, else as reached through a symlink under `~`;
+  - outside `~`: none (refused), unless keyed by origin;
+  - inside the store: none (refused); there, the current notebook is the
+    enclosing notebook folder.
 - Keys are plain names: each part matches `[A-Za-z0-9._-]+`, never `.` or `..`.
 - `.source` records the origin at init time, as `key=value` lines with paths
   from `~`, so the store moves between machines unchanged:
@@ -73,7 +76,10 @@ not confused with the `todo` and `note` skills that use it.
   origin=git@github.com:dixie6502/folio.git
   ```
 
-  `origin` is empty for a folder keyed by its path.
+  `origin` is empty for a folder keyed by its path, and drops any credentials
+  (`https://user:token@host/…` → `https://host/…`), since the store is synced.
+  `path` is empty for a repository outside `~`; `check` then has no folder to
+  verify.
 
 ### Finding the current notebook
 
@@ -86,11 +92,15 @@ the store wins. None: `no notebook here: folio init`, exit 1.
 - `folio init`: creates the notebook of the current folder under its key
   (origin key in a repository, else the current folder's path key), copies the
   template's contents into it (`$FOLIO_TEMPLATE`, default `<store>/.template`;
-  missing or empty: nothing copied), writes `.source`, and prints the path.
-  Already a notebook: prints the path, exit 0, changes nothing.
+  missing or empty: nothing copied), writes `.source`, and prints the path. It
+  builds the notebook in a hidden staging folder and moves it into place, so a
+  failure leaves nothing behind. Already a notebook: prints the path, exit 0,
+  changes nothing.
 - `folio [-c] [<query>]`: the switcher, as today, over the current notebook.
 - `folio --all [<query>]`: the switcher over every notebook, each note shown as
-  `<key>/<name>`. Opens only: creating from it is refused.
+  `<key>/<name>`. Opens only: creating from it is refused. Notebooks under `_*`
+  folders are left out, like the notes there.
+- `--` ends the switcher's flags: `folio -c -- -draft` searches for `-draft`.
 - `folio --dir`: prints the current notebook's path, exit 1 if none. For scripts
   and Claude skills, which cannot drive the switcher.
 - `folio check`: the store's health. Changes nothing; exit 1 when it reports

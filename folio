@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+#
+# folio - notational-velocity switcher over one notebook per folder
+#
+# Standalone script; symlink into $PATH. A notebook is a folder of markdown
+# notes in the store ($FOLIO_HOME, default ~/memo), tied to the folder it was
+# initialized from: a git repository by its origin (owner/repo), any other folder
+# under ~ by its path from ~. Files and folders whose name starts with '_' or '.'
+# are skipped. Structure comes from '#tags' inside the notes (e.g. #moc), which
+# the switcher shows and searches. See `folio help`.
+
+# Editor for opening/creating notes; honors $EDITOR (may include flags, e.g.
+# "code -w"; split on whitespace), defaults to vim.
+read -ra EDITOR_CMD <<< "${EDITOR-}"
+[ ${#EDITOR_CMD[@]} -gt 0 ] || EDITOR_CMD=(vim)  # unset, empty or whitespace-only
+readonly EDITOR_CMD
+
+# The store holding every notebook, and the template copied into new ones.
+STORE="${FOLIO_HOME:-$HOME/memo}"
+STORE="${STORE%/}"  # match rg's paths, which never carry a doubled slash
+TEMPLATE="${FOLIO_TEMPLATE:-$STORE/.template}"
+readonly STORE TEMPLATE
+# Marks a notebook and records where it was initialized (key, path, origin).
+readonly SOURCE_FILE=.source
+# A key part: a plain name, never hidden ('.') or skipped ('_') by the listing.
+readonly KEY_PART='[A-Za-z0-9][A-Za-z0-9._-]*'
+# ~ with symlinks resolved, so path keys compare with `pwd -P`.
+HOME_REAL=$(cd "$HOME" 2>/dev/null && pwd -P)
+STORE_REAL=$(cd "$STORE" 2>/dev/null && pwd -P)
+readonly HOME_REAL STORE_REAL
+# git reads these before -C (a git hook exports them): folio asks about the
+# current folder's repository, never the caller's.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
+# Print a message to stderr and exit non-zero.
+die() { echo "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- keys
+
+# Prints the path in origin URL $1, lowercased, without scheme, user, host,
+# port or .git: https://host/O/r.git, git@host:o/r.git, ssh://git@host:22/o/r
+# all give o/r.
+key_from_url() {
+    local url="$1" path=""
+    case "$url" in
+        *://*)  # scheme://[user@]host[:port]/path
+            local rest="${url#*://}"
+            [[ "$rest" == */* ]] && path="${rest#*/}" ;;
+        *:*) path="${url#*:}" ;;  # [user@]host:path (scp-like)
+        *) path="$url" ;;         # a local path
+    esac
+    path="${path%/}"; path="${path%.git}"; path="${path#/}"
+    echo "${path,,}"  # forges ignore case in owner/repo
+}
+
+# Prints origin URL $1 without the credentials a scheme URL may carry
+# (https://user:token@host/o/r → https://host/o/r): .source is synced.
+strip_credentials() {
+    local url="$1"
+    if [[ "$url" == *://* ]]; then
+        local scheme="${url%%://*}" rest="${url#*://}"
+        local authority="${rest%%/*}" path=""
+        [[ "$rest" == */* ]] && path="/${rest#*/}"
+        url="$scheme://${authority##*@}$path"
+    fi
+    echo "$url"
+}
+
+# True when $1 is a usable key: plain name parts joined by '/'.
+is_safe_key() { [[ "$1" =~ ^${KEY_PART}(/${KEY_PART})*$ ]]; }
+
+# The one place a folder is resolved. Sets FOLDER (folder $1, symlinks
+# resolved), ORIGIN (its repository's origin URL without credentials, if any),
+# ORIGIN_KEY (the key in it), HOME_PATH (its path from ~: physical, else as
+# reached through a symlink under ~; empty outside ~ and for ~ itself) and
+# IN_STORE (1 when the folder lies in the store). Returns 1 when it does not
+# exist.
+resolve_folder() {
+    local logical
+    FOLDER=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    logical=$(cd "$1" && pwd -L)
+    ORIGIN=$(git -C "$FOLDER" remote get-url origin 2>/dev/null)
+    ORIGIN=$(strip_credentials "$ORIGIN")
+    ORIGIN_KEY=""
+    [ -z "$ORIGIN" ] || ORIGIN_KEY=$(key_from_url "$ORIGIN")
+    HOME_PATH=""
+    if [[ -n "$HOME_REAL" && "$FOLDER" == "$HOME_REAL"/* ]]; then
+        HOME_PATH="${FOLDER#"$HOME_REAL"/}"
+    elif [[ "$logical" == "$HOME"/* ]]; then
+        HOME_PATH="${logical#"$HOME"/}"
+    fi
+    IN_STORE=0
+    if [[ -n "$STORE_REAL" && ( "$FOLDER" == "$STORE_REAL" || "$FOLDER" == "$STORE_REAL"/* ) ]]; then
+        IN_STORE=1
+    fi
+}
+
+# Sets KEY to folder $1's key (its origin key, else its path from ~), with
+# resolve_folder's variables. Returns 1 with the reason in KEY_ERROR.
+folder_key() {
+    KEY="" KEY_ERROR=""
+    resolve_folder "$1" || { KEY_ERROR="no such folder: $1"; return 1; }
+    [ "$IN_STORE" = 0 ] || { KEY_ERROR="inside the store, not a project folder: $1"; return 1; }
+    KEY="${ORIGIN_KEY:-$HOME_PATH}"
+    [ -n "$KEY" ] || { KEY_ERROR="not a notebook folder (outside ~, or ~ itself): $1"; return 1; }
+    is_safe_key "$KEY" || { KEY_ERROR="unsafe key '$KEY' for $1"; return 1; }
+}
+
+# ---------------------------------------------------------------- notebooks
+
+# True when store folder $1 is a notebook.
+is_notebook() { [ -f "$1/$SOURCE_FILE" ]; }
+
+# True, setting NOTEBOOK, when key $1 is safe and has a notebook.
+has_notebook() {
+    is_safe_key "$1" && is_notebook "$STORE/$1" || return 1
+    NOTEBOOK="$STORE/$1"
+}
+
+# Lists every notebook folder of the store, sorted; hidden (.*) and skipped
+# (_*) folders are left out, as the listing leaves them out.
+list_notebooks() {
+    [ -d "$STORE" ] || return 0
+    find "$STORE" -mindepth 1 \( -type f -name "$SOURCE_FILE" -printf '%h\n' \) \
+        -o \( \( -name '.*' -o -name '_*' \) -prune \) | sort
+}
+
+# Lists the notebooks to search for --all: every one not inside another, whose
+# notes the outer one's search already covers.
+list_search_roots() {
+    local notebook
+    while IFS= read -r notebook; do
+        enclosing_notebook "${notebook#"$STORE"/}" >/dev/null || echo "$notebook"
+    done < <(list_notebooks)
+}
+
+# Sets NOTEBOOK to the current folder's notebook: its origin key first, then
+# the path key of each folder walking up to ~. Returns 1 if none.
+find_notebook() {
+    NOTEBOOK=""
+    resolve_folder . || return 1
+    if [ "$IN_STORE" = 1 ]; then  # inside a notebook's own folder: that notebook
+        local dir="$FOLDER"
+        while [[ "$dir" == "$STORE_REAL"/* ]]; do
+            if is_notebook "$dir"; then NOTEBOOK="$STORE/${dir#"$STORE_REAL"/}"; return 0; fi
+            dir="${dir%/*}"
+        done
+        return 1
+    fi
+    has_notebook "$ORIGIN_KEY" && return 0
+    local path="$HOME_PATH"
+    while [ -n "$path" ]; do
+        has_notebook "$path" && return 0
+        [[ "$path" == */* ]] || return 1
+        path="${path%/*}"
+    done
+    return 1
+}
+
+# Dies with a pointer to `folio init` when the current folder has no notebook.
+require_notebook() { find_notebook || die "no notebook here: folio init"; }
+
+# Prints the key of the notebook that key $1 sits inside; returns 1 if none.
+enclosing_notebook() {
+    local parent="$1"
+    while [[ "$parent" == */* ]]; do
+        parent="${parent%/*}"
+        if is_notebook "$STORE/$parent"; then echo "$parent"; return 0; fi
+    done
+    return 1
+}
+
+# Sets TARGET to KEY's store folder, refusing one already taken or inside a
+# notebook.
+claim_target() {
+    local parent
+    TARGET="$STORE/$KEY"
+    [ ! -e "$TARGET" ] || die "$KEY already has a notebook (or a folder) in $STORE"
+    if parent=$(enclosing_notebook "$KEY"); then
+        die "$KEY would be inside the notebook $parent"
+    fi
+}
+
+# Writes notebook $1's record from folder_key's KEY, HOME_PATH and ORIGIN. A
+# folder outside ~ (an origin-keyed repository) records no path.
+write_source() {
+    local path=""
+    # shellcheck disable=SC2088  # a literal ~: .source paths are written from ~
+    [ -z "$HOME_PATH" ] || path="~/$HOME_PATH"
+    printf 'key=%s\npath=%s\norigin=%s\n' "$KEY" "$path" "$ORIGIN" > "$1/$SOURCE_FILE"
+}
+
+# folio init: create the current folder's notebook from the template.
+init_notebook() {
+    folder_key . || die "$KEY_ERROR"
+    if is_notebook "$STORE/$KEY"; then echo "$STORE/$KEY"; return; fi
+    claim_target
+    # Built in a hidden staging folder, then moved into place, so a failure
+    # never leaves a half-made notebook blocking the key.
+    local staging
+    if ! { mkdir -p "$STORE" && staging=$(mktemp -d "$STORE/.init.XXXXXX"); }; then
+        die "cannot create a staging folder in $STORE"
+    fi
+    if ! { { [ ! -d "$TEMPLATE" ] || cp -R "$TEMPLATE/." "$staging/"; } &&
+        write_source "$staging" && mkdir -p "${TARGET%/*}" && mv "$staging" "$TARGET"; }; then
+        rm -rf -- "$staging"
+        die "cannot create $TARGET (template: $TEMPLATE)"
+    fi
+    echo "$TARGET"
+}
+
+# folio map <old-key>: move notebook <old-key> to the current folder's key.
+map_notebook() {
+    [ $# -eq 1 ] || die "usage: folio map <old-key>"
+    local old="$1"
+    is_safe_key "$old" || die "unsafe key: '$old'"
+    is_notebook "$STORE/$old" || die "$old is not a notebook in $STORE"
+    folder_key . || die "$KEY_ERROR"
+    TARGET="$STORE/$KEY"
+    if [ "$KEY" != "$old" ]; then
+        claim_target
+        if ! { mkdir -p "${TARGET%/*}" && mv "$STORE/$old" "$TARGET"; }; then
+            die "cannot move $old to $KEY"
+        fi
+        # Drop the parent folders the move left empty.
+        [[ "$old" != */* ]] || (cd "$STORE" && rmdir -p "${old%/*}" 2>/dev/null)
+    fi
+    write_source "$TARGET" || die "cannot write $TARGET/$SOURCE_FILE"
+    echo "$TARGET"
+}
+
+# Prints the stray entries under store folder $1: neither a notebook (KEPT=1)
+# nor a folder leading to one (KEPT=2). Hidden entries (.git, .template) are
+# never strays.
+list_strays() {
+    local entry key
+    for entry in "$1"/*; do
+        [ -e "$entry" ] || continue
+        key="${entry#"$STORE"/}"
+        case "${KEPT[$key]-}" in
+            1) ;;
+            2) list_strays "$entry" ;;
+            *) echo "$key" ;;
+        esac
+    done
+}
+
+# folio check: report nested, badly recorded, orphan and re-keyed notebooks, and
+# strays. Changes nothing; exit 1 when anything is reported.
+check_store() {
+    local findings=0 notebook key parent field value recorded path origin stray
+    local notebooks=()
+    declare -gA KEPT=()
+    mapfile -t notebooks < <(list_notebooks)
+    report() { echo "$*"; findings=$((findings + 1)); }
+    for notebook in "${notebooks[@]}"; do
+        key="${notebook#"$STORE"/}"
+        KEPT[$key]=1
+        parent="$key"
+        while [[ "$parent" == */* ]]; do
+            parent="${parent%/*}"
+            [ "${KEPT[$parent]-}" = 1 ] || KEPT[$parent]=2
+        done
+        if parent=$(enclosing_notebook "$key"); then
+            report "nested $key: inside the notebook $parent"
+        fi
+        recorded="" path="" origin=""
+        while IFS='=' read -r field value; do
+            case "$field" in
+                key) recorded="$value" ;;
+                path) path="$value" ;;
+                origin) origin="$value" ;;
+            esac
+        done < "$notebook/$SOURCE_FILE"
+        if [[ "$recorded" != "$key" || ( -n "$path" && "$path" != \~/* ) ||
+            ( -z "$path" && -z "$origin" ) ]]; then
+            report "bad record $key: $SOURCE_FILE names key '$recorded', path '$path'"
+            continue
+        fi
+        [ -n "$path" ] || continue  # initialized outside ~: no folder to check
+        if ! folder_key "$HOME/${path#\~/}"; then
+            if [ -z "$FOLDER" ]; then
+                report "orphan $key: $path no longer exists (from its new place: folio map $key)"
+            else
+                report "re-keyed $key: $KEY_ERROR"
+            fi
+        elif [ "$KEY" != "$key" ]; then
+            report "re-keyed $key: $path is now $KEY (from it: folio map $key)"
+        fi
+    done
+    while IFS= read -r stray; do
+        report "stray $stray: not in a notebook"
+    done < <(list_strays "$STORE")
+    [ "$findings" -eq 0 ]
+}
+
+# Filter selecting note files: *.md only (the suffix the switcher hides and
+# adds on create), skipping any file or folder named _* (rg already skips
+# hidden ones). Shared by the file listing and the tag scan so both see exactly
+# the same set of notes.
+readonly NOTE_FILTER=(--glob '*.md' --glob '!_*')
+
+# List note files in folders, sorted so the switcher order is stable.
+list_notes() { rg --files --sort path "${NOTE_FILTER[@]}" "$@"; }
+
+# True when a new note's relative path would be listed by NOTE_FILTER: no part
+# empty or starting with '_' or '.' (which also rules out '..' and absolute
+# paths). rg's ignore files (.gitignore etc.) can still hide a note; that is
+# left to the user.
+is_listable_path() {
+    local part parts
+    IFS=/ read -ra parts <<< "$1"
+    [[ "$1" != */ && ${#parts[@]} -gt 0 ]] || return 1
+    for part in "${parts[@]}"; do
+        [[ -n "$part" && "$part" != [_.]* ]] || return 1
+    done
+}
+
+# A '#word' tag: preceded by start-of-line or whitespace so markdown headings
+# ('# Title') and URL fragments ('foo#bar') never match. Group 1 is the tag
+# alone, which rg prints via -r '$1'.
+readonly TAG_RE='(?:^|[[:space:]])(#[A-Za-z][A-Za-z0-9_/-]*)'
+# Byte rg puts between a matched file's path and the tag. A tag never contains
+# US (0x1F) but a path may, so awk splits on the last one.
+readonly TAG_FIELD_SEP=$'\x1f'
+# awk for the listing: gawk counts characters (not bytes) in a UTF-8 locale, so
+# names with accents still line up; other awks (mawk) work but may misalign.
+AWK_CMD=$(command -v gawk || command -v awk) || die "awk not found"
+readonly AWK_CMD
+# Dim cyan so tags read as secondary next to the note name (needs fzf --ansi).
+readonly TAG_COLOR=$'\033[2;36m' TAG_RESET=$'\033[0m'
+# Cap the note-name column so one long name can't push every tag off-screen.
+readonly MAX_NAME_WIDTH=50
+
+# List the notes of folders $2... as two tab-separated columns for the switcher,
+# names shown relative to folder $1:
+#   <padded name + colored #tags>\t<file path>
+# A single rg pass collects every tag with its file; awk aggregates them per
+# note (deduped, in document order) and left-joins the full note list so
+# tag-less notes still appear. Doing this in awk — rather than a shell loop
+# that spawns rg per file — keeps the switcher fast on large folders.
+notes_with_tags() {
+    local root="$1"; shift
+    # The root goes in through ENVIRON, not -v, which would expand backslashes.
+    # shellcheck disable=SC2016  # the $ fields belong to the awk program
+    NOTE_ROOT="$root/" "$AWK_CMD" -F"$TAG_FIELD_SEP" -v col="$TAG_COLOR" -v rst="$TAG_RESET" \
+        -v cap="$MAX_NAME_WIDTH" '
+        BEGIN { root = ENVIRON["NOTE_ROOT"] }
+        # First input (note list): record each note in order, track widest name.
+        FNR == NR {
+            # Relative path without .md; index/substr, not sub(), so regex
+            # characters in the folder path are taken literally. Tabs become
+            # spaces so the display field never contains the field delimiter.
+            name = $0
+            if (index(name, root) == 1) name = substr(name, length(root) + 1)
+            sub(/\.md$/, "", name)
+            gsub(/\t/, " ", name)
+            order[++n] = $0; nameof[$0] = name
+            if (length(name) > width) width = length(name)
+            next
+        }
+        # Second input (rg "path<US>#tag" matches): collect deduped tags per note.
+        {
+            tag = $NF; file = substr($0, 1, length($0) - length(tag) - 1)
+            if (!((file SUBSEP tag) in seen)) {
+                seen[file SUBSEP tag] = 1
+                tags[file] = tags[file] (tags[file] ? " " : "") tag
+            }
+        }
+        END {
+            if (width > cap) width = cap
+            for (k = 1; k <= n; k++) {
+                file = order[k]
+                suffix = (tags[file] != "") ? "  " col tags[file] rst : ""
+                printf "%-*s%s\t%s\n", width, nameof[file], suffix, file
+            }
+        }
+    ' <(list_notes "$@") \
+      <(rg -o -N --no-heading --color=never --field-match-separator "$TAG_FIELD_SEP" \
+            -r '$1' "$TAG_RE" "${NOTE_FILTER[@]}" "$@")
+}
+
+show_help() {
+    cat <<'EOF'
+folio - notational-velocity switcher over one notebook per folder
+
+USAGE
+    folio [-c] [<query>]     filter the current notebook's notes, open the
+                               pick or create the typed name; .md is implicit
+                               (never typed, never shown); type folder/name to
+                               create in a subfolder
+    folio [-c] -- <query>    the same, for a query that is a command name or
+                               starts with '-'
+    folio --all [<query>]    filter every notebook's notes (shown as
+                               key/name) and open the pick; never creates
+    folio init               create the current folder's notebook; prints it
+    folio --dir              print the current notebook's folder
+    folio check              report orphan, re-keyed, nested or badly
+                               recorded notebooks and strays; exit 1 if any
+    folio map <old-key>      move notebook <old-key> to the current folder's
+                               key (after a rename, a move or a new origin)
+    folio help               show this message
+
+NOTEBOOKS
+    A notebook is a folder of the store holding a .source record. Its key is
+    the folder's git origin path, lowercased (owner/repo, whatever the URL
+    form), inside a repository with an origin, else the folder's path from ~.
+    The current notebook is the origin key's, else the nearest initialized
+    folder walking up to ~ (inside a notebook's own folder: that notebook).
+    Outside one, folio refuses.
+
+KEYS
+    enter                    open the highlighted match (with -c, also create
+                               the typed name when nothing matches)
+    ctrl-n                   create a note named by your query (default mode
+                               only; near-matches stay visible, so a typo never
+                               silently forks the namespace)
+
+FLAGS
+    -c, --create-on-enter    make enter create on no match and drop ctrl-n, so
+                               a single key both opens and creates (fast
+                               capture). An over-filtered (empty) list creates
+                               your raw query, so use it knowingly.
+
+TAGS
+    '#word' tags in a note are listed next to its name and searchable: type
+    #moc to filter to notes tagged #moc.
+
+ENVIRONMENT
+    FOLIO_HOME      the store (default: ~/memo); _* and .* files and folders
+                      are skipped
+    FOLIO_TEMPLATE  folder copied into each new notebook, without overwriting
+                      (default: $FOLIO_HOME/.template; missing: nothing)
+    EDITOR          editor for notes (default: vim)
+EOF
+}
+
+# Sets SWITCH_MODE and SWITCH_QUERY from the switcher's arguments. The mode is
+# open (never creates: $1 is 0), ctrl-n (the default) or enter (-c).
+parse_switch_args() {
+    local can_create="$1"; shift
+    SWITCH_QUERY=""
+    SWITCH_MODE=open
+    [ "$can_create" = 0 ] || SWITCH_MODE=ctrl-n
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -c|--create-on-enter)
+                [ "$can_create" = 1 ] || die "--all never creates: drop -c"
+                SWITCH_MODE=enter; shift ;;
+            --)  # the rest is the query, even when it looks like a flag
+                shift
+                [ $# -le 1 ] || die "unexpected arg: $2"
+                [ $# -eq 0 ] || { [ -z "$SWITCH_QUERY" ] || die "unexpected arg: $1"; SWITCH_QUERY="$1"; }
+                return ;;
+            -*) die "unknown flag: $1" ;;
+            *)
+                [ -z "$SWITCH_QUERY" ] || die "unexpected arg: $1"
+                SWITCH_QUERY="$1"; shift ;;
+        esac
+    done
+}
+
+# note_switch <root> <mode> <query> <dir>... — open a note of folders <dir>...
+# (named relative to <root>) or create the typed name under <root> (see
+# show_help). Mode ctrl-n creates only via --expect=ctrl-n; mode enter omits
+# --expect, so fzf exit 1 (enter on no match) is the create path; mode open
+# never creates. Esc (130) never creates.
+note_switch() {
+    local home="$1" mode="$2" query="$3"; shift 3
+
+    # Show/search only the display field and interpret its color codes.
+    # (--accept-nth would drop the display field itself, but needs fzf 0.60+.)
+    local args=(-e --height '~40%' --layout=reverse --print-query
+                --ansi --delimiter=$'\t' --with-nth=1 --nth=1)
+    case "$mode" in
+        open) args+=(--header 'enter: open') ;;
+        enter) args+=(--header 'enter: open/create') ;;
+        ctrl-n) args+=(--expect=ctrl-n --header 'enter: open   ctrl-n: create typed name') ;;
+    esac
+    [ -n "$query" ] && args+=(-q "$query")
+
+    # Built once: fzf shows it and the create path searches it. awk prints only
+    # at the end, so buffering it here delays nothing.
+    local listing out rc typed key="" selected
+    listing=$(notes_with_tags "$home" "$@")
+    out=$(printf '%s' "$listing" | fzf "${args[@]}"); rc=$?
+    [ "$rc" != 2 ] || die "fzf failed"
+    # fzf prints the query first (--print-query), then a key line only when
+    # --expect is set, then the "<display>\t<path>" selection.
+    {
+        IFS= read -r typed
+        [ "$mode" != ctrl-n ] || IFS= read -r key
+        IFS= read -r selected
+    } <<< "$out"
+    selected="${selected#*$'\t'}"  # first tab: the display field has none
+
+    if [ "$key" = ctrl-n ] || { [ "$mode" = enter ] && [ "$rc" = 1 ]; }; then
+        [ -n "$typed" ] || exit 0
+        local base="${typed%.md}.md" target
+        is_listable_path "$base" \
+            || die "not a listable note path (no part empty or starting with '_' or '.'): $base"
+        # Reuse an existing note whose path differs only in case, so a
+        # capitalisation slip never forks the namespace.
+        target=$(printf '%s\n' "$listing" | cut -d$'\t' -f2- | grep -iFxm1 -- "$home/$base")
+        if [ -z "$target" ]; then
+            target="$home/$base"
+            # The editor writes the file on save; it cannot make the folder.
+            mkdir -p "${target%/*}" || die "cannot create folder: ${target%/*}"
+        fi
+        "${EDITOR_CMD[@]}" "$target"
+    elif [ "$rc" = 0 ] && [ -n "$selected" ]; then
+        "${EDITOR_CMD[@]}" "$selected"
+    fi
+}
+
+# Dies unless no argument is left: commands take none beyond their own.
+refuse_extra_args() { [ $# -eq 0 ] || die "unexpected arg: $1"; }
+
+# The switcher over the current notebook.
+switch_current() {
+    parse_switch_args 1 "$@"
+    require_notebook
+    note_switch "$NOTEBOOK" "$SWITCH_MODE" "$SWITCH_QUERY" "$NOTEBOOK"
+}
+
+# The switcher over every notebook; it never creates.
+switch_all() {
+    parse_switch_args 0 "$@"
+    local notebooks=()
+    mapfile -t notebooks < <(list_search_roots)
+    [ ${#notebooks[@]} -gt 0 ] || die "no notebook in $STORE: folio init"
+    note_switch "$STORE" "$SWITCH_MODE" "$SWITCH_QUERY" "${notebooks[@]}"
+}
+
+main() {
+    case "${1-}" in
+        -h|--help|help) show_help ;;
+        init) shift; refuse_extra_args "$@"; init_notebook ;;
+        check) shift; refuse_extra_args "$@"; check_store ;;
+        map) shift; map_notebook "$@" ;;
+        --dir) shift; refuse_extra_args "$@"; require_notebook; echo "$NOTEBOOK" ;;
+        --all) shift; switch_all "$@" ;;
+        *) switch_current "$@" ;;  # bare default, incl. no args
+    esac
+}
+
+# Sourced (by the tests), only the functions are defined.
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"
