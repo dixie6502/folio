@@ -1,0 +1,20 @@
+# Local hooks only: they run tools the bootstrap already installs.
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --pre-commit --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+      - id: bats
+        name: bats test/
+        entry: bats test/
+        language: system
+        pass_filenames: false
+        always_run: true
