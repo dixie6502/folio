@@ -20,11 +20,11 @@ STORE="${FOLIO_HOME:-$HOME/memo}"
 STORE="${STORE%/}"  # match rg's paths, which never carry a doubled slash
 TEMPLATE="${FOLIO_TEMPLATE:-$STORE/.template}"
 readonly STORE TEMPLATE
-# Marks a notebook and records where it was initialized (key, path, origin).
+# Marks a notebook and records where it was initialized (id, path, origin).
 readonly SOURCE_FILE=.source
-# A key part: a plain name, never hidden ('.') or skipped ('_') by the listing.
-readonly KEY_PART='[A-Za-z0-9][A-Za-z0-9._-]*'
-# ~ with symlinks resolved, so path keys compare with `pwd -P`.
+# An id part: a plain name, never hidden ('.') or skipped ('_') by the listing.
+readonly ID_PART='[A-Za-z0-9][A-Za-z0-9._-]*'
+# ~ with symlinks resolved, so path ids compare with `pwd -P`.
 HOME_REAL=$(cd "$HOME" 2>/dev/null && pwd -P)
 STORE_REAL=$(cd "$STORE" 2>/dev/null && pwd -P)
 readonly HOME_REAL STORE_REAL
@@ -35,12 +35,12 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 # Print a message to stderr and exit non-zero.
 die() { echo "$*" >&2; exit 1; }
 
-# ---------------------------------------------------------------- keys
+# ---------------------------------------------------------------- ids
 
 # Prints the path in origin URL $1, lowercased, without scheme, user, host,
 # port or .git: https://host/O/r.git, git@host:o/r.git, ssh://git@host:22/o/r
 # all give o/r.
-key_from_url() {
+id_from_url() {
     local url="$1" path=""
     case "$url" in
         *://*)  # scheme://[user@]host[:port]/path
@@ -66,12 +66,12 @@ strip_credentials() {
     echo "$url"
 }
 
-# True when $1 is a usable key: plain name parts joined by '/'.
-is_safe_key() { [[ "$1" =~ ^${KEY_PART}(/${KEY_PART})*$ ]]; }
+# True when $1 is a usable id: plain name parts joined by '/'.
+is_safe_id() { [[ "$1" =~ ^${ID_PART}(/${ID_PART})*$ ]]; }
 
 # The one place a folder is resolved. Sets FOLDER (folder $1, symlinks
 # resolved), ORIGIN (its repository's origin URL without credentials, if any),
-# ORIGIN_KEY (the key in it), HOME_PATH (its path from ~: physical, else as
+# ORIGIN_ID (the id in it), HOME_PATH (its path from ~: physical, else as
 # reached through a symlink under ~; empty outside ~ and for ~ itself) and
 # IN_STORE (1 when the folder lies in the store). Returns 1 when it does not
 # exist.
@@ -81,8 +81,8 @@ resolve_folder() {
     logical=$(cd "$1" && pwd -L)
     ORIGIN=$(git -C "$FOLDER" remote get-url origin 2>/dev/null)
     ORIGIN=$(strip_credentials "$ORIGIN")
-    ORIGIN_KEY=""
-    [ -z "$ORIGIN" ] || ORIGIN_KEY=$(key_from_url "$ORIGIN")
+    ORIGIN_ID=""
+    [ -z "$ORIGIN" ] || ORIGIN_ID=$(id_from_url "$ORIGIN")
     HOME_PATH=""
     if [[ -n "$HOME_REAL" && "$FOLDER" == "$HOME_REAL"/* ]]; then
         HOME_PATH="${FOLDER#"$HOME_REAL"/}"
@@ -95,15 +95,15 @@ resolve_folder() {
     fi
 }
 
-# Sets KEY to folder $1's key (its origin key, else its path from ~), with
-# resolve_folder's variables. Returns 1 with the reason in KEY_ERROR.
-folder_key() {
-    KEY="" KEY_ERROR=""
-    resolve_folder "$1" || { KEY_ERROR="no such folder: $1"; return 1; }
-    [ "$IN_STORE" = 0 ] || { KEY_ERROR="inside the store, not a project folder: $1"; return 1; }
-    KEY="${ORIGIN_KEY:-$HOME_PATH}"
-    [ -n "$KEY" ] || { KEY_ERROR="not a notebook folder (outside ~, or ~ itself): $1"; return 1; }
-    is_safe_key "$KEY" || { KEY_ERROR="unsafe key '$KEY' for $1"; return 1; }
+# Sets ID to folder $1's id (its origin id, else its path from ~), with
+# resolve_folder's variables. Returns 1 with the reason in ID_ERROR.
+folder_id() {
+    ID="" ID_ERROR=""
+    resolve_folder "$1" || { ID_ERROR="no such folder: $1"; return 1; }
+    [ "$IN_STORE" = 0 ] || { ID_ERROR="inside the store, not a project folder: $1"; return 1; }
+    ID="${ORIGIN_ID:-$HOME_PATH}"
+    [ -n "$ID" ] || { ID_ERROR="not a notebook folder (outside ~, or ~ itself): $1"; return 1; }
+    is_safe_id "$ID" || { ID_ERROR="unsafe id '$ID' for $1"; return 1; }
 }
 
 # ---------------------------------------------------------------- notebooks
@@ -111,9 +111,9 @@ folder_key() {
 # True when store folder $1 is a notebook.
 is_notebook() { [ -f "$1/$SOURCE_FILE" ]; }
 
-# True, setting NOTEBOOK, when key $1 is safe and has a notebook.
+# True, setting NOTEBOOK, when id $1 is safe and has a notebook.
 has_notebook() {
-    is_safe_key "$1" && is_notebook "$STORE/$1" || return 1
+    is_safe_id "$1" && is_notebook "$STORE/$1" || return 1
     NOTEBOOK="$STORE/$1"
 }
 
@@ -134,8 +134,8 @@ list_search_roots() {
     done < <(list_notebooks)
 }
 
-# Sets NOTEBOOK to the current folder's notebook: its origin key first, then
-# the path key of each folder walking up to ~. Returns 1 if none.
+# Sets NOTEBOOK to the current folder's notebook: its origin id first, then
+# the path id of each folder walking up to ~. Returns 1 if none.
 find_notebook() {
     NOTEBOOK=""
     resolve_folder . || return 1
@@ -147,7 +147,7 @@ find_notebook() {
         done
         return 1
     fi
-    has_notebook "$ORIGIN_KEY" && return 0
+    has_notebook "$ORIGIN_ID" && return 0
     local path="$HOME_PATH"
     while [ -n "$path" ]; do
         has_notebook "$path" && return 0
@@ -160,7 +160,7 @@ find_notebook() {
 # Dies with a pointer to `folio init` when the current folder has no notebook.
 require_notebook() { find_notebook || die "no notebook here: folio init"; }
 
-# Prints the key of the notebook that key $1 sits inside; returns 1 if none.
+# Prints the id of the notebook that id $1 sits inside; returns 1 if none.
 enclosing_notebook() {
     local parent="$1"
     while [[ "$parent" == */* ]]; do
@@ -170,33 +170,33 @@ enclosing_notebook() {
     return 1
 }
 
-# Sets TARGET to KEY's store folder, refusing one already taken or inside a
+# Sets TARGET to ID's store folder, refusing one already taken or inside a
 # notebook.
 claim_target() {
     local parent
-    TARGET="$STORE/$KEY"
-    [ ! -e "$TARGET" ] || die "$KEY already has a notebook (or a folder) in $STORE"
-    if parent=$(enclosing_notebook "$KEY"); then
-        die "$KEY would be inside the notebook $parent"
+    TARGET="$STORE/$ID"
+    [ ! -e "$TARGET" ] || die "$ID already has a notebook (or a folder) in $STORE"
+    if parent=$(enclosing_notebook "$ID"); then
+        die "$ID would be inside the notebook $parent"
     fi
 }
 
-# Writes notebook $1's record from folder_key's KEY, HOME_PATH and ORIGIN. A
-# folder outside ~ (an origin-keyed repository) records no path.
+# Writes notebook $1's record from folder_id's ID, HOME_PATH and ORIGIN. A
+# folder outside ~ (an origin-identified repository) records no path.
 write_source() {
     local path=""
     # shellcheck disable=SC2088  # a literal ~: .source paths are written from ~
     [ -z "$HOME_PATH" ] || path="~/$HOME_PATH"
-    printf 'key=%s\npath=%s\norigin=%s\n' "$KEY" "$path" "$ORIGIN" > "$1/$SOURCE_FILE"
+    printf 'id=%s\npath=%s\norigin=%s\n' "$ID" "$path" "$ORIGIN" > "$1/$SOURCE_FILE"
 }
 
 # folio init: create the current folder's notebook from the template.
 init_notebook() {
-    folder_key . || die "$KEY_ERROR"
-    if is_notebook "$STORE/$KEY"; then echo "$STORE/$KEY"; return; fi
+    folder_id . || die "$ID_ERROR"
+    if is_notebook "$STORE/$ID"; then echo "$STORE/$ID"; return; fi
     claim_target
     # Built in a hidden staging folder, then moved into place, so a failure
-    # never leaves a half-made notebook blocking the key.
+    # never leaves a half-made notebook blocking the id.
     local staging
     if ! { mkdir -p "$STORE" && staging=$(mktemp -d "$STORE/.init.XXXXXX"); }; then
         die "cannot create a staging folder in $STORE"
@@ -209,18 +209,18 @@ init_notebook() {
     echo "$TARGET"
 }
 
-# folio map <old-key>: move notebook <old-key> to the current folder's key.
+# folio map <old-id>: move notebook <old-id> to the current folder's id.
 map_notebook() {
-    [ $# -eq 1 ] || die "usage: folio map <old-key>"
+    [ $# -eq 1 ] || die "usage: folio map <old-id>"
     local old="$1"
-    is_safe_key "$old" || die "unsafe key: '$old'"
+    is_safe_id "$old" || die "unsafe id: '$old'"
     is_notebook "$STORE/$old" || die "$old is not a notebook in $STORE"
-    folder_key . || die "$KEY_ERROR"
-    TARGET="$STORE/$KEY"
-    if [ "$KEY" != "$old" ]; then
+    folder_id . || die "$ID_ERROR"
+    TARGET="$STORE/$ID"
+    if [ "$ID" != "$old" ]; then
         claim_target
         if ! { mkdir -p "${TARGET%/*}" && mv "$STORE/$old" "$TARGET"; }; then
-            die "cannot move $old to $KEY"
+            die "cannot move $old to $ID"
         fi
         # Drop the parent folders the move left empty.
         [[ "$old" != */* ]] || (cd "$STORE" && rmdir -p "${old%/*}" 2>/dev/null)
@@ -233,59 +233,59 @@ map_notebook() {
 # nor a folder leading to one (KEPT=2). Hidden entries (.git, .template) are
 # never strays.
 list_strays() {
-    local entry key
+    local entry id
     for entry in "$1"/*; do
         [ -e "$entry" ] || continue
-        key="${entry#"$STORE"/}"
-        case "${KEPT[$key]-}" in
+        id="${entry#"$STORE"/}"
+        case "${KEPT[$id]-}" in
             1) ;;
             2) list_strays "$entry" ;;
-            *) echo "$key" ;;
+            *) echo "$id" ;;
         esac
     done
 }
 
-# folio check: report nested, badly recorded, orphan and re-keyed notebooks, and
+# folio check: report nested, badly recorded and orphan notebooks, changed ids, and
 # strays. Changes nothing; exit 1 when anything is reported.
 check_store() {
-    local findings=0 notebook key parent field value recorded path origin stray
+    local findings=0 notebook id parent field value recorded path origin stray
     local notebooks=()
     declare -gA KEPT=()
     mapfile -t notebooks < <(list_notebooks)
     report() { echo "$*"; findings=$((findings + 1)); }
     for notebook in "${notebooks[@]}"; do
-        key="${notebook#"$STORE"/}"
-        KEPT[$key]=1
-        parent="$key"
+        id="${notebook#"$STORE"/}"
+        KEPT[$id]=1
+        parent="$id"
         while [[ "$parent" == */* ]]; do
             parent="${parent%/*}"
             [ "${KEPT[$parent]-}" = 1 ] || KEPT[$parent]=2
         done
-        if parent=$(enclosing_notebook "$key"); then
-            report "nested $key: inside the notebook $parent"
+        if parent=$(enclosing_notebook "$id"); then
+            report "nested $id: inside the notebook $parent"
         fi
         recorded="" path="" origin=""
         while IFS='=' read -r field value; do
             case "$field" in
-                key) recorded="$value" ;;
+                id) recorded="$value" ;;
                 path) path="$value" ;;
                 origin) origin="$value" ;;
             esac
         done < "$notebook/$SOURCE_FILE"
-        if [[ "$recorded" != "$key" || ( -n "$path" && "$path" != \~/* ) ||
+        if [[ "$recorded" != "$id" || ( -n "$path" && "$path" != \~/* ) ||
             ( -z "$path" && -z "$origin" ) ]]; then
-            report "bad record $key: $SOURCE_FILE names key '$recorded', path '$path'"
+            report "bad record $id: $SOURCE_FILE names id '$recorded', path '$path'"
             continue
         fi
         [ -n "$path" ] || continue  # initialized outside ~: no folder to check
-        if ! folder_key "$HOME/${path#\~/}"; then
+        if ! folder_id "$HOME/${path#\~/}"; then
             if [ -z "$FOLDER" ]; then
-                report "orphan $key: $path no longer exists (from its new place: folio map $key)"
+                report "orphan $id: $path no longer exists (from its new place: folio map $id)"
             else
-                report "re-keyed $key: $KEY_ERROR"
+                report "id changed $id: $ID_ERROR"
             fi
-        elif [ "$KEY" != "$key" ]; then
-            report "re-keyed $key: $path is now $KEY (from it: folio map $key)"
+        elif [ "$ID" != "$id" ]; then
+            report "id changed $id: $path is now $ID (from it: folio map $id)"
         fi
     done
     while IFS= read -r stray; do
@@ -392,20 +392,20 @@ USAGE
     folio [-c] -- <query>    the same, for a query that is a command name or
                                starts with '-'
     folio --all [<query>]    filter every notebook's notes (shown as
-                               key/name) and open the pick; never creates
+                               id/name) and open the pick; never creates
     folio init               create the current folder's notebook; prints it
     folio --dir              print the current notebook's folder
-    folio check              report orphan, re-keyed, nested or badly
-                               recorded notebooks and strays; exit 1 if any
-    folio map <old-key>      move notebook <old-key> to the current folder's
-                               key (after a rename, a move or a new origin)
+    folio check              report orphan, nested or badly recorded
+                               notebooks, changed ids and strays; exit 1 if any
+    folio map <old-id>       move notebook <old-id> to the current folder's
+                               id (after a rename, a move or a new origin)
     folio help               show this message
 
 NOTEBOOKS
-    A notebook is a folder of the store holding a .source record. Its key is
+    A notebook is a folder of the store holding a .source record. Its id is
     the folder's git origin path, lowercased (owner/repo, whatever the URL
     form), inside a repository with an origin, else the folder's path from ~.
-    The current notebook is the origin key's, else the nearest initialized
+    The current notebook is the origin id's, else the nearest initialized
     folder walking up to ~ (inside a notebook's own folder: that notebook).
     Outside one, folio refuses.
 

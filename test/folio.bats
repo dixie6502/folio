@@ -33,9 +33,9 @@ folio_in() {
   (cd "$dir" && "$FOLIO" "$@")
 }
 
-# ---------------------------------------------------------------- keys
+# ---------------------------------------------------------------- ids
 
-@test "a repository's key comes from origin, whatever the URL form" {
+@test "a repository's id comes from origin, whatever the URL form" {
   local url
   for url in https://github.com/owner/repo.git git@github.com:owner/repo.git \
     ssh://git@example.org:2222/owner/repo https://example.org/owner/repo/; do
@@ -71,14 +71,14 @@ folio_in() {
   [ "$output" = "$STORE/owner/repo" ]
 }
 
-@test "a folder outside any repository is keyed by its path from ~" {
+@test "a folder outside any repository is identified by its path from ~" {
   mkdir -p "$HOME/scratch/topic"
   run folio_in "$HOME/scratch/topic" init
   [ "$status" -eq 0 ]
   [ "$output" = "$STORE/scratch/topic" ]
 }
 
-@test "a repository without origin is keyed by its path" {
+@test "a repository without origin is identified by its path" {
   make_repo "$HOME/scratch/local"
   run folio_in "$HOME/scratch/local" init
   [ "$output" = "$STORE/scratch/local" ]
@@ -109,7 +109,7 @@ folio_in() {
   [ "$status" -eq 0 ]
 }
 
-@test "origin keys are lowercased: forges ignore case in owner/repo" {
+@test "origin ids are lowercased: forges ignore case in owner/repo" {
   make_repo "$HOME/a" git@github.com:Owner/Repo.git
   make_repo "$HOME/b" https://github.com/owner/repo
   folio_in "$HOME/a" init
@@ -134,7 +134,7 @@ folio_in() {
   grep -qx "path=~/link/proj" "$STORE/link/proj/.source"
 }
 
-@test "GIT_DIR from a calling hook does not change the folder's key" {
+@test "GIT_DIR from a calling hook does not change the folder's id" {
   make_repo "$HOME/r" git@github.com:owner/repo.git
   make_repo "$HOME/other" git@github.com:owner/other.git
   run env GIT_DIR="$HOME/other/.git" bash -c "cd '$HOME/r' && '$FOLIO' init"
@@ -175,7 +175,7 @@ folio_in() {
   [ "$output" = "$STORE/scratch" ]
 }
 
-@test "a repository's origin key is tried before the folders above it" {
+@test "a repository's origin id is tried before the folders above it" {
   init_at "$HOME/scratch"
   make_repo "$HOME/scratch/r" git@github.com:owner/repo.git
   run folio_in "$HOME/scratch/r" --dir
@@ -198,9 +198,17 @@ folio_in() {
   make_repo "$HOME/GitHub/owner/repo" git@github.com:owner/repo.git
   folio_in "$HOME/GitHub/owner/repo" init
   run cat "$STORE/owner/repo/.source"
-  [ "${lines[0]}" = "key=owner/repo" ]
+  [ "${lines[0]}" = "id=owner/repo" ]
   [ "${lines[1]}" = "path=~/GitHub/owner/repo" ]
   [ "${lines[2]}" = "origin=git@github.com:owner/repo.git" ]
+}
+
+@test "a .source record passes gitleaks: the store is pushed through it" {
+  command -v gitleaks >/dev/null || skip "gitleaks not installed"
+  make_repo "$HOME/GitHub/owner/repo" https://github.com/owner/repo.git
+  folio_in "$HOME/GitHub/owner/repo" init
+  run gitleaks dir "$STORE" --no-banner --redact
+  [ "$status" -eq 0 ]
 }
 
 @test "init copies the template without overwriting, and is idempotent" {
@@ -242,7 +250,7 @@ folio_in() {
 
 # ---------------------------------------------------------------- listing
 
-@test "the listing of all notebooks names each note by its key" {
+@test "the listing of all notebooks names each note by its id" {
   mkdir -p "$HOME/scratch/a" "$HOME/scratch/b"
   folio_in "$HOME/scratch/a" init
   folio_in "$HOME/scratch/b" init
@@ -259,8 +267,8 @@ folio_in() {
 @test "--all searches nested notebooks once and skips _* folders" {
   init_at "$HOME/scratch"
   mkdir -p "$STORE/scratch/inner" "$STORE/_archive/old"
-  printf 'key=scratch/inner\npath=~/x\norigin=\n' >"$STORE/scratch/inner/.source"
-  printf 'key=_archive/old\npath=~/y\norigin=\n' >"$STORE/_archive/old/.source"
+  printf 'id=scratch/inner\npath=~/x\norigin=\n' >"$STORE/scratch/inner/.source"
+  printf 'id=_archive/old\npath=~/y\norigin=\n' >"$STORE/_archive/old/.source"
   run bash -c "source '$FOLIO' && list_search_roots"
   [ "$output" = "$STORE/scratch" ]
 }
@@ -304,19 +312,19 @@ folio_in() {
   [[ $output == *"orphan scratch/gone"* ]]
 }
 
-@test "check reports a re-keyed notebook when origin changes" {
+@test "check reports a changed id when origin changes" {
   make_repo "$HOME/r" git@github.com:owner/old.git
   folio_in "$HOME/r" init
   git -C "$HOME/r" remote set-url origin git@github.com:owner/new.git
   run "$FOLIO" check
   [ "$status" -eq 1 ]
-  [[ $output == *"re-keyed owner/old"*"owner/new"* ]]
+  [[ $output == *"id changed owner/old"*"owner/new"* ]]
 }
 
 @test "check reports bad records and strays" {
   mkdir -p "$HOME/scratch/a" "$STORE/stray-dir"
   folio_in "$HOME/scratch/a" init
-  sed -i 's/^key=.*/key=wrong/' "$STORE/scratch/a/.source"
+  sed -i 's/^id=.*/id=wrong/' "$STORE/scratch/a/.source"
   touch "$STORE/loose.md"
   run "$FOLIO" check
   [ "$status" -eq 1 ]
@@ -327,7 +335,7 @@ folio_in() {
 
 # ---------------------------------------------------------------- map
 
-@test "map moves a re-keyed notebook to the folder's current key" {
+@test "map moves a notebook to the folder's new id" {
   make_repo "$HOME/r" git@github.com:owner/old.git
   folio_in "$HOME/r" init
   echo note >"$STORE/owner/old/n.md"
@@ -336,7 +344,7 @@ folio_in() {
   [ "$status" -eq 0 ]
   [ "$(cat "$STORE/owner/new/n.md")" = note ]
   [ ! -e "$STORE/owner/old" ]
-  grep -qx "key=owner/new" "$STORE/owner/new/.source"
+  grep -qx "id=owner/new" "$STORE/owner/new/.source"
   run "$FOLIO" check
   [ "$status" -eq 0 ]
 }
@@ -358,7 +366,7 @@ folio_in() {
   [ ! -e "$STORE/solo" ]
 }
 
-@test "map refuses an unknown old key or an existing target" {
+@test "map refuses an unknown old id or an existing target" {
   mkdir -p "$HOME/scratch/a" "$HOME/scratch/b"
   folio_in "$HOME/scratch/a" init
   folio_in "$HOME/scratch/b" init
@@ -370,7 +378,7 @@ folio_in() {
   [[ $output == *"already has a notebook"* ]]
 }
 
-@test "map refuses an unsafe old key" {
+@test "map refuses an unsafe old id" {
   mkdir -p "$HOME/scratch/a"
   run folio_in "$HOME/scratch/a" map ../etc
   [ "$status" -eq 1 ]

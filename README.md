@@ -14,7 +14,7 @@ folio [-c] [<query>]       # switch among the current notebook's notes
 folio --all [<query>]      # switch among every notebook's notes (open only)
 folio --dir                # print the current notebook's folder
 folio check                # report notebooks gone astray
-folio map <old-key>        # re-attach a notebook to the current folder
+folio map <old-id>        # re-attach a notebook to the current folder
 ```
 
 Filter as you type; **Enter** opens the highlighted match in `$EDITOR`,
@@ -30,7 +30,7 @@ with `-` goes after `--` (`folio -- init`, `folio -c -- -draft`).
 
 ### Notebooks
 
-A notebook's **key** names its folder in the store:
+A notebook's **id** names its folder in the store:
 
 - inside a git repository with an `origin`: origin's path, lowercased since
   forges ignore case there, whatever the URL form
@@ -40,7 +40,7 @@ A notebook's **key** names its folder in the store:
 - any other folder under `~` (also when reached through a symlink under `~`):
   its path from `~` (`scratch/<topic>`).
 
-`folio` uses the current folder's notebook: the origin key's, else the nearest
+`folio` uses the current folder's notebook: the origin id's, else the nearest
 initialized folder walking up to `~`; inside a notebook's own folder in the
 store, that notebook. Outside one it refuses; there is no default notebook.
 `folio init` creates the notebook, copies the template into it, and records
@@ -48,14 +48,14 @@ where it came from in `.source` (credentials in the origin URL are dropped; a
 repository outside `~` records no path):
 
 ```
-key=<owner>/<repo>
+id=<owner>/<repo>
 path=~/GitHub/<owner>/<repo>
 origin=git@<hostname>:<owner>/<repo>.git
 ```
 
-When a key changes (repo renamed, new origin, folder moved), `folio check`
-reports the notebook as re-keyed or orphan, and `folio map <old-key>`, run
-from the folder, moves it to the folder's current key.
+When an id changes (repo renamed, new origin, folder moved), `folio check`
+reports the notebook as orphan or with a changed id, and `folio map <old-id>`, run
+from the folder, moves it to the folder's current id.
 
 ### Tags
 
