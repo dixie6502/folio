@@ -1,26 +1,25 @@
-# Migration: one notebook per folder
+# Migration: note → folio, one notebook per folder
 
-Draft spec, under discussion. Extends and simplifies `note` so it can hold every
-project's notes and open items, outside the project repos, for use both in a
-terminal and by Claude (mneme's `memo` plugin).
+Spec, agreed. Extends and simplifies `note` into `folio`, so it can hold every project's notes
+and open items, outside the project repos, for use both in a terminal and by
+Claude (mneme's `memo` plugin).
 
-The tool is renamed, so it is not confused with the `todo` and `note` skills
-that use it (name open; candidates: `folio`, `sheaf`, `quire`, `jot`). Below,
-`note` stands for the new name, and `NOTE_*` variables follow it.
+The tool, its repo and its variables are renamed `folio` (`FOLIO_*`), so it is
+not confused with the `todo` and `note` skills that use it.
 
 ## Decided
 
-- `note` stays a switcher: filter, open, create. No link commands; links are
+- `folio` stays a switcher: filter, open, create. No link commands; links are
   `wikijump.vim` in the editor and `wkref` on the command line. Beside it, a few
   non-interactive commands manage notebooks: `init`, `--dir`, `check`, `map`.
 - No built-in global notebook. A notebook is tied to a folder and exists only
-  once initialized there; outside one, `note` refuses.
+  once initialized there; outside one, `folio` refuses.
 - A todo list is an ordinary note (`TODO.md`). Its format belongs to the `todo`
-  skill; `note` knows nothing about it. Likewise any frontmatter (a `created:`
-  date) is a skill's convention, not `note`'s.
-- `note` knows no editor convention either: what a new notebook starts with
+  skill; `folio` knows nothing about it. Likewise any frontmatter (a `created:`
+  date) is a skill's convention, not `folio`'s.
+- `folio` knows no editor convention either: what a new notebook starts with
   comes from a template folder.
-- `note` is unaware of git beyond reading a repository's `origin`. Versioning
+- `folio` is unaware of git beyond reading a repository's `origin`. Versioning
   and sync stay outside (mneme's hooks).
 - Bash for now; a Go port comes when dropping `fzf`/`rg` is wanted (see
   README › Plan). Tests with `bats-core`.
@@ -29,7 +28,7 @@ that use it (name open; candidates: `folio`, `sheaf`, `quire`, `jot`). Below,
 
 ### Store and notebooks
 
-- The store is one folder, `$NOTE_HOME` (default: see Open questions), holding
+- The store is one folder, `$FOLIO_HOME` (default `~/memo`), holding
   one notebook per initialized folder, and the template:
 
   ```
@@ -52,9 +51,9 @@ that use it (name open; candidates: `folio`, `sheaf`, `quire`, `jot`). Below,
     without host or `.git` suffix. Every URL form gives the same key:
 
     ```
-    https://github.com/dixie6502/note.git      → dixie6502/note
-    git@github.com:dixie6502/note.git          → dixie6502/note
-    ssh://git@<hostname>:2222/dixie6502/note   → dixie6502/note
+    https://github.com/dixie6502/folio.git      → dixie6502/folio
+    git@github.com:dixie6502/folio.git          → dixie6502/folio
+    ssh://git@<hostname>:2222/dixie6502/folio   → dixie6502/folio
     ```
 
     So every checkout of a repo opens the same notebook, wherever it lives:
@@ -69,9 +68,9 @@ that use it (name open; candidates: `folio`, `sheaf`, `quire`, `jot`). Below,
   from `~`, so the store moves between machines unchanged:
 
   ```
-  key=dixie6502/note
-  path=~/GitHub/dixie6502/note
-  origin=git@github.com:dixie6502/note.git
+  key=dixie6502/folio
+  path=~/GitHub/dixie6502/folio
+  origin=git@github.com:dixie6502/folio.git
   ```
 
   `origin` is empty for a folder keyed by its path.
@@ -80,31 +79,31 @@ that use it (name open; candidates: `folio`, `sheaf`, `quire`, `jot`). Below,
 
 From the current folder: the origin key, if inside a repository with one; then
 the path key of each folder walking up to `~`. The first key with a notebook in
-the store wins. None: `no notebook here: note init`, exit 1.
+the store wins. None: `no notebook here: folio init`, exit 1.
 
 ### Commands
 
-- `note init`: creates the notebook of the current folder under its key
+- `folio init`: creates the notebook of the current folder under its key
   (origin key in a repository, else the current folder's path key), copies the
-  template's contents into it (`$NOTE_TEMPLATE`, default `<store>/.template`;
+  template's contents into it (`$FOLIO_TEMPLATE`, default `<store>/.template`;
   missing or empty: nothing copied), writes `.source`, and prints the path.
   Already a notebook: prints the path, exit 0, changes nothing.
-- `note [-c] [<query>]`: the switcher, as today, over the current notebook.
-- `note --all [<query>]`: the switcher over every notebook, each note shown as
+- `folio [-c] [<query>]`: the switcher, as today, over the current notebook.
+- `folio --all [<query>]`: the switcher over every notebook, each note shown as
   `<key>/<name>`. Opens only: creating from it is refused.
-- `note --dir`: prints the current notebook's path, exit 1 if none. For scripts
+- `folio --dir`: prints the current notebook's path, exit 1 if none. For scripts
   and Claude skills, which cannot drive the switcher.
-- `note check`: the store's health. Changes nothing; exit 1 when it reports
+- `folio check`: the store's health. Changes nothing; exit 1 when it reports
   anything. For each notebook:
   - **orphan**: the folder recorded in `.source` no longer exists (moved or
-    deleted; from its new place, `note map` re-attaches the notebook);
+    deleted; from its new place, `folio map` re-attaches the notebook);
   - **re-keyed**: the folder exists but its key now differs (origin added or
-    changed, repo renamed or transferred): `note map <old-key>` from it;
+    changed, repo renamed or transferred): `folio map <old-key>` from it;
   - **bad record**: `.source` unreadable or its `key` not the notebook's folder.
 
   And outside notebooks: **stray** files or folders in the store (not `.template`,
   not under a notebook).
-- `note map <old-key>`: run from a folder, moves the notebook `<old-key>` to the
+- `folio map <old-key>`: run from a folder, moves the notebook `<old-key>` to the
   current folder's key and rewrites its `.source`. Refuses when `<old-key>` is
   not a notebook, or the current key already has one. Empty parent folders left
   by the move are removed.
@@ -126,17 +125,12 @@ tested through its listing function, not interactively.
 
 ## Effects on mneme
 
-- The `memo` store becomes `note`'s store. Its layout flattens: today's
+- The `memo` store (`~/memo`) becomes `folio`'s store, in place. Its layout flattens: today's
   `<scope>/TODO.md`, `<scope>/note/` and `<scope>/todo/` become one notebook per
   key, `TODO.md` and item details being ordinary notes in it, with a `.source`
   written for each. A migration script does it once.
-- The `todo` and `note` skills find the notebook with `note --dir` instead of
+- The `todo` and `note` skills find the notebook with `folio --dir` instead of
   `memo.sh dir`; `memo.sh` keeps only the sync.
-- `debrief` reads every notebook in the store and lists `note check` findings
+- `debrief` reads every notebook in the store and lists `folio check` findings
   under "Needs you".
 - `global.md` needs no rule about where open items or notes live.
-
-## Open questions
-
-1. The new name (candidates above), which also names the store variable.
-2. The store's default folder: `~/<name>`, or keep `~/memo`?
