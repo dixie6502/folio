@@ -26,7 +26,7 @@ terminal and by Claude (mneme's `memo` plugin).
 
   ```
   <store>/
-    <owner>/<repo>/        a clone at ~/<Host>/<owner>/<repo>
+    <owner>/<repo>/        a git repository, keyed by its origin
       .wikijump            root marker for wikijump.vim
       TODO.md
       auth-flow.md
@@ -35,12 +35,25 @@ terminal and by Claude (mneme's `memo` plugin).
   ```
 
 - **Notebook key** of a folder:
-  - inside a git clone at `~/<Host>/<owner>/<repo>` (worktrees included):
-    `<owner>/<repo>`. The host part is dropped, so mirrors of a repo share one
-    notebook;
-  - any other folder under `~`: its path relative to `~`;
+  - inside a git repository with an `origin` remote: the path of origin's URL,
+    without host or `.git` suffix. Every URL form gives the same key:
+
+    ```
+    https://github.com/dixie6502/note.git      → dixie6502/note
+    git@github.com:dixie6502/note.git          → dixie6502/note
+    ssh://git@<hostname>:2222/dixie6502/note   → dixie6502/note
+    ```
+
+    So every checkout of a repo opens the same notebook, wherever it lives:
+    worktrees share origin, mirrors with the same `<owner>/<repo>` on two hosts
+    share a notebook, nested groups keep their parts (`group/sub/repo`), a fork
+    has its own (its origin), and inside a submodule the submodule wins;
+  - any other folder under `~` (a repository without `origin` included): its
+    path relative to `~`;
   - outside `~`: none (refused).
 - Keys are plain names: each part matches `[A-Za-z0-9._-]+`, never `.` or `..`.
+- A key changes when its source does (origin added, repo renamed or transferred,
+  folder moved): the notebook is then moved by hand in the store.
 
 ### Commands
 
@@ -48,7 +61,7 @@ terminal and by Claude (mneme's `memo` plugin).
   its `.wikijump`) and prints its path. Already there: prints the path, exit 0.
 - `note [-c] [<query>]`: as today, over the current notebook. The current
   notebook is the nearest initialized one walking up from the current folder
-  (inside a clone, the clone's key is tried first). None: refuses with
+  (inside a repository, its origin key is tried first). None: refuses with
   `no notebook here: note init`, exit 1.
 - `note --all [<query>]`: the switcher over every notebook, each note shown as
   `<key>/<name>`. Creating from it needs a query starting with an existing key.
@@ -75,8 +88,8 @@ reuse on create, `.gitignore` honoured.
 
 1. Store variable and default: keep `NOTE_HOME` (`~/notes`) and move `~/memo`
    there, or another name?
-2. A folder whose path changes (renamed, moved) loses its notebook unless it is a
-   clone. Acceptable, with a manual `mv` in the store?
+2. A changed key (see Store and notebooks) needs a manual `mv` in the store.
+   Acceptable, or should `note init` offer to move the old notebook?
 3. Tests: plain Bash test scripts (no new dependency) or `bats`?
 4. `note --all` creation: require the `<key>/` prefix (proposed), or refuse
    creating from `--all`?
