@@ -229,6 +229,30 @@ map_notebook() {
     echo "$TARGET"
 }
 
+# folio forget <id>: delete orphan notebook <id> and its notes, after a yes on
+# stdin. Refuses anything else: a non-notebook, a notebook whose folder still
+# exists or cannot be checked, one holding another notebook.
+forget_notebook() {
+    [ $# -eq 1 ] || die "usage: folio forget <id>"
+    local id="$1" notebook inner answer notes=()
+    is_safe_id "$id" || die "unsafe id: '$id'"
+    is_notebook "$STORE/$id" || die "$id is not a notebook in $STORE"
+    notebook="$STORE/$id"
+    diagnose_notebook "$id"
+    [ "$FINDING_KIND" = orphan ] ||
+        die "$id is not an orphan, so it is kept${FINDING:+ ($FINDING)}"
+    inner=$(find "$notebook" -mindepth 2 -name "$SOURCE_FILE" -print -quit)
+    [ -z "$inner" ] || die "$id holds the notebook ${inner%/*}: forget or map it first"
+    mapfile -t notes < <(list_notes "$notebook")
+    printf '%s\ndelete %s and its %d note(s)? [y/N] ' "$FINDING" "$notebook" "${#notes[@]}" >&2
+    read -r answer || answer=""
+    [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]] || die "kept $id"
+    rm -rf -- "$notebook" || die "cannot delete $notebook"
+    # Drop the parent folders the deletion left empty.
+    [[ "$id" != */* ]] || (cd "$STORE" && rmdir -p "${id%/*}" 2>/dev/null)
+    echo "forgot $id"
+}
+
 # Prints the stray entries under store folder $1: neither a notebook (KEPT=1)
 # nor a folder leading to one (KEPT=2). Hidden entries (.git, .template) are
 # never strays.
@@ -245,10 +269,44 @@ list_strays() {
     done
 }
 
+# Checks notebook $1's record against its folder. Sets FINDING to the problem
+# found (empty when healthy) and FINDING_KIND to its kind: orphan (the recorded
+# folder is gone), "id changed" or "bad record". A notebook initialized outside
+# ~ records no folder, so it is never found orphan.
+diagnose_notebook() {
+    local id="$1" field value recorded="" path="" origin=""
+    FINDING="" FINDING_KIND=""
+    while IFS='=' read -r field value; do
+        case "$field" in
+            id) recorded="$value" ;;
+            path) path="$value" ;;
+            origin) origin="$value" ;;
+        esac
+    done < "$STORE/$id/$SOURCE_FILE"
+    if [[ "$recorded" != "$id" || ( -n "$path" && "$path" != \~/* ) ||
+        ( -z "$path" && -z "$origin" ) ]]; then
+        FINDING_KIND="bad record"
+        FINDING="bad record $id: $SOURCE_FILE names id '$recorded', path '$path'"
+    elif [ -z "$path" ]; then
+        return 0
+    elif ! folder_id "$HOME/${path#\~/}"; then
+        if [ -z "$FOLDER" ]; then
+            FINDING_KIND=orphan
+            FINDING="orphan $id: $path no longer exists (from its new place: folio map $id; or folio forget $id)"
+        else
+            FINDING_KIND="id changed"
+            FINDING="id changed $id: $ID_ERROR"
+        fi
+    elif [ "$ID" != "$id" ]; then
+        FINDING_KIND="id changed"
+        FINDING="id changed $id: $path is now $ID (from it: folio map $id)"
+    fi
+}
+
 # folio check: report nested, badly recorded and orphan notebooks, changed ids, and
 # strays. Changes nothing; exit 1 when anything is reported.
 check_store() {
-    local findings=0 notebook id parent field value recorded path origin stray
+    local findings=0 notebook id parent stray
     local notebooks=()
     declare -gA KEPT=()
     mapfile -t notebooks < <(list_notebooks)
@@ -264,29 +322,8 @@ check_store() {
         if parent=$(enclosing_notebook "$id"); then
             report "nested $id: inside the notebook $parent"
         fi
-        recorded="" path="" origin=""
-        while IFS='=' read -r field value; do
-            case "$field" in
-                id) recorded="$value" ;;
-                path) path="$value" ;;
-                origin) origin="$value" ;;
-            esac
-        done < "$notebook/$SOURCE_FILE"
-        if [[ "$recorded" != "$id" || ( -n "$path" && "$path" != \~/* ) ||
-            ( -z "$path" && -z "$origin" ) ]]; then
-            report "bad record $id: $SOURCE_FILE names id '$recorded', path '$path'"
-            continue
-        fi
-        [ -n "$path" ] || continue  # initialized outside ~: no folder to check
-        if ! folder_id "$HOME/${path#\~/}"; then
-            if [ -z "$FOLDER" ]; then
-                report "orphan $id: $path no longer exists (from its new place: folio map $id)"
-            else
-                report "id changed $id: $ID_ERROR"
-            fi
-        elif [ "$ID" != "$id" ]; then
-            report "id changed $id: $path is now $ID (from it: folio map $id)"
-        fi
+        diagnose_notebook "$id"
+        [ -z "$FINDING" ] || report "$FINDING"
     done
     while IFS= read -r stray; do
         report "stray $stray: not in a notebook"
@@ -399,6 +436,8 @@ USAGE
                                notebooks, changed ids and strays; exit 1 if any
     folio map <old-id>       move notebook <old-id> to the current folder's
                                id (after a rename, a move or a new origin)
+    folio forget <id>        delete orphan notebook <id> and its notes, after
+                               confirmation; refuses any other notebook
     folio help               show this message
 
 NOTEBOOKS
@@ -538,6 +577,7 @@ main() {
         init) shift; refuse_extra_args "$@"; init_notebook ;;
         check) shift; refuse_extra_args "$@"; check_store ;;
         map) shift; map_notebook "$@" ;;
+        forget) shift; forget_notebook "$@" ;;
         --dir) shift; refuse_extra_args "$@"; require_notebook; echo "$NOTEBOOK" ;;
         --all) shift; switch_all "$@" ;;
         *) switch_current "$@" ;;  # bare default, incl. no args

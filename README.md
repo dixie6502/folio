@@ -15,6 +15,7 @@ folio --all [<query>]      # switch among every notebook's notes (open only)
 folio --dir                # print the current notebook's folder
 folio check                # report notebooks gone astray
 folio map <old-id>        # re-attach a notebook to the current folder
+folio forget <id>         # delete an orphan notebook and its notes
 ```
 
 Filter as you type; **Enter** opens the highlighted match in `$EDITOR`,
@@ -56,6 +57,14 @@ origin=git@<hostname>:<owner>/<repo>.git
 When an id changes (repo renamed, new origin, folder moved), `folio check`
 reports the notebook as orphan or with a changed id, and `folio map <old-id>`, run
 from the folder, moves it to the folder's current id.
+
+When a folder is deleted for good, `folio forget <id>` deletes its notebook
+and every note in it, after a `y` on the prompt. It deletes only an orphan:
+it refuses a notebook whose folder still exists (every clone of a repo shares
+its notebook), one with a changed id or a bad record, one initialized outside
+`~` (no folder to check), one holding another notebook, and anything that is
+not a notebook. Empty parent folders are removed. The store is a plain
+folder: once your sync runs, the deletion reaches every machine.
 
 ### Tags
 

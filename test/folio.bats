@@ -385,10 +385,93 @@ folio_in() {
   [[ $output == *"unsafe"* ]]
 }
 
+# ---------------------------------------------------------------- forget
+
+@test "forget deletes an orphan and its empty parents after a yes" {
+  init_at "$HOME/scratch/gone"
+  echo note >"$STORE/scratch/gone/n.md"
+  rm -rf "$HOME/scratch/gone"
+  run bash -c "echo y | '$FOLIO' forget scratch/gone"
+  [ "$status" -eq 0 ]
+  [[ $output == *"1 note(s)"* && $output == *"forgot scratch/gone"* ]]
+  [ ! -e "$STORE/scratch" ]
+  [ -d "$STORE" ]
+}
+
+@test "forget keeps the notebook without a yes" {
+  init_at "$HOME/scratch/gone"
+  rm -rf "$HOME/scratch/gone"
+  local answer
+  for answer in n "" yesplease; do
+    run bash -c "printf '%s\n' '$answer' | '$FOLIO' forget scratch/gone"
+    [ "$status" -eq 1 ]
+    [[ $output == *"kept scratch/gone"* ]]
+  done
+  run "$FOLIO" forget scratch/gone </dev/null
+  [ "$status" -eq 1 ]
+  [ -f "$STORE/scratch/gone/.source" ]
+}
+
+@test "forget refuses a notebook whose folder exists or changed id" {
+  init_at "$HOME/scratch/live"
+  make_repo "$HOME/r" git@github.com:owner/old.git
+  folio_in "$HOME/r" init
+  git -C "$HOME/r" remote set-url origin git@github.com:owner/new.git
+  local id
+  for id in scratch/live owner/old; do
+    run bash -c "echo y | '$FOLIO' forget $id"
+    [ "$status" -eq 1 ]
+    [[ $output == *"not an orphan"* ]]
+    [ -f "$STORE/$id/.source" ]
+  done
+}
+
+@test "forget refuses a notebook initialized outside ~ or badly recorded" {
+  make_repo "$BATS_TEST_TMPDIR/outside" git@github.com:owner/out.git
+  folio_in "$BATS_TEST_TMPDIR/outside" init
+  rm -rf "$BATS_TEST_TMPDIR/outside"
+  init_at "$HOME/scratch/bad"
+  rm -rf "$HOME/scratch/bad"
+  sed -i 's/^id=.*/id=wrong/' "$STORE/scratch/bad/.source"
+  local id
+  for id in owner/out scratch/bad; do
+    run bash -c "echo y | '$FOLIO' forget $id"
+    [ "$status" -eq 1 ]
+    [ -f "$STORE/$id/.source" ]
+  done
+}
+
+@test "forget refuses non-notebooks and unsafe ids" {
+  mkdir -p "$STORE/stray-dir"
+  run bash -c "echo y | '$FOLIO' forget stray-dir"
+  [ "$status" -eq 1 ]
+  [[ $output == *"not a notebook"* ]]
+  [ -d "$STORE/stray-dir" ]
+  run bash -c "echo y | '$FOLIO' forget ../etc"
+  [ "$status" -eq 1 ]
+  [[ $output == *"unsafe"* ]]
+  run "$FOLIO" forget
+  [ "$status" -eq 1 ]
+  [[ $output == *"usage"* ]]
+}
+
+@test "forget refuses an orphan holding another notebook" {
+  init_at "$HOME/scratch/outer"
+  rm -rf "$HOME/scratch/outer"
+  # init refuses nesting; a hand move into the store can still nest one.
+  mkdir -p "$STORE/scratch/outer/inner"
+  printf 'id=scratch/outer/inner\npath=~/scratch/outer/inner\norigin=\n' \
+    >"$STORE/scratch/outer/inner/.source"
+  run bash -c "echo y | '$FOLIO' forget scratch/outer"
+  [ "$status" -eq 1 ]
+  [[ $output == *"holds the notebook"* ]]
+  [ -f "$STORE/scratch/outer/inner/.source" ]
+}
+
 # ---------------------------------------------------------------- misc
 
 @test "help lists the commands" {
   run "$FOLIO" help
   [ "$status" -eq 0 ]
-  [[ $output == *"folio init"* && $output == *"folio map"* ]]
+  [[ $output == *"folio init"* && $output == *"folio map"* && $output == *"folio forget"* ]]
 }
