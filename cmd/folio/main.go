@@ -41,19 +41,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		command, rest = args[0], args[1:]
 	}
-	input := bufio.NewReader(stdin)
-	ask := func(question string) bool { return confirm(input, stderr, question) }
+	// Only a person at a terminal answers questions: a calling tool never
+	// answers on the user's behalf.
+	var ask notebook.Confirm
+	if isTerminal(stdin) {
+		input := bufio.NewReader(stdin)
+		ask = func(question string) bool { return confirm(input, stderr, question) }
+	}
 
 	var result string
 	switch {
 	case command == "--dir" && len(rest) == 0:
 		result, err = env.Find(cwd)
 	case command == "init" && len(rest) == 0:
-		var interactive notebook.Confirm
-		if isTerminal(stdin) {
-			interactive = ask
-		}
-		result, err = env.Init(cwd, false, interactive)
+		result, err = env.Init(cwd, false, ask)
 	case command == "init" && len(rest) == 1 && rest[0] == "--local":
 		result, err = env.Init(cwd, true, nil)
 	case command == "forget" && len(rest) == 1:

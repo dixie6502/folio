@@ -71,17 +71,18 @@ func TestInitAndDir(t *testing.T) {
 	}
 }
 
-func TestForgetReadsTheAnswer(t *testing.T) {
+func TestForgetRefusesWithoutATerminal(t *testing.T) {
 	home := tempHome(t)
 	owner := filepath.Join(home, "GitHub", "owner")
 	writeFile(t, filepath.Join(owner, "notebooks", ".folio"))
-	writeFile(t, filepath.Join(owner, "notebooks", "gone", ".notebook"))
+	notebook := filepath.Join(owner, "notebooks", "gone")
+	writeFile(t, filepath.Join(notebook, ".notebook"))
 
-	if code, _, stderr := folio(t, owner, "n\n", "forget", "gone"); code != 1 || !strings.Contains(stderr, "kept") {
-		t.Fatalf("forget, answer no: %d %q", code, stderr)
+	if code, _, stderr := folio(t, owner, "y\n", "forget", "gone"); code != 1 || !strings.Contains(stderr, "needs a terminal") {
+		t.Fatalf("forget with a piped yes: %d %q", code, stderr)
 	}
-	if code, stdout, _ := folio(t, owner, "y\n", "forget", "gone"); code != 0 || !strings.Contains(stdout, "forgot") {
-		t.Fatalf("forget, answer yes: %d %q", code, stdout)
+	if _, err := os.Stat(notebook); err != nil {
+		t.Fatalf("a piped yes deleted the notebook: %v", err)
 	}
 }
 

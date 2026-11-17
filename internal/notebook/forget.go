@@ -9,7 +9,7 @@ import (
 )
 
 // Forget deletes the notebook of folder, which must no longer exist, after
-// confirm's yes.
+// confirm's yes; a nil confirm (no one to ask) keeps it.
 func (e Env) Forget(folder string, confirm Confirm) (string, error) {
 	folder, err := absolutePath(folder)
 	if err != nil {
@@ -23,7 +23,10 @@ func (e Env) Forget(folder string, confirm Confirm) (string, error) {
 		return "", fmt.Errorf("%s has no notebook", folder)
 	}
 	question := fmt.Sprintf("delete %s and its %d note(s)?", notebook, countNotes(notebook))
-	if confirm == nil || !confirm(question) {
+	if confirm == nil {
+		return "", fmt.Errorf("kept %s: folio forget asks for confirmation, so it needs a terminal", notebook)
+	}
+	if !confirm(question) {
 		return "", fmt.Errorf("kept %s", notebook)
 	}
 	if err := os.RemoveAll(notebook); err != nil {

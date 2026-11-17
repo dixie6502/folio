@@ -133,6 +133,8 @@ func TestForget(t *testing.T) {
 	if !strings.Contains(asked, "1 note(s)") || !isNotebook(orphan) {
 		t.Fatalf("question %q, or the notebook was not kept", asked)
 	}
+	_, err = env.Forget(gone, nil)
+	wantError(t, err, "needs a terminal")
 	if _, err := env.Forget(gone, yes); err != nil || exists(orphan) {
 		t.Fatalf("forget failed: %v", err)
 	}

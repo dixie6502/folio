@@ -111,7 +111,9 @@ scripts and tests).
   moving within its store; copy then delete across stores. When the folder
   was already moved by hand, it moves only the notebook.
 - `folio forget <folder>` deletes an orphan's notebook and every note in it,
-  after a `y` on the prompt. It refuses a notebook whose folder exists.
+  after a `y` on the prompt. It refuses a notebook whose folder exists, and
+  refuses to run without a terminal, so a calling tool never confirms a
+  deletion on the user's behalf.
 
 ### Sync
 
