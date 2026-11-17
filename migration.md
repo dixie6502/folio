@@ -182,14 +182,26 @@ folio sync [--daemon]
 1. Write the Go skeleton: notebook lookup, `--dir`, `init`, `mv`, `forget`,
    `check`, with tests (Go unit tests; the bats suite as acceptance tests).
 2. Add `folio sync` and the systemd unit.
-3. Migrate the existing store with a one-off script: each notebook moves from
-   the current store to `<parent>/notebooks/<name>/` (stores) or
-   `<folder>/notes/` (other folders), using the folder its `.source` records;
-   history is split per store with `git filter-repo`; the old store
-   repository is archived.
+3. Migrate the existing store with `migrate/stores.sh` (dry run unless
+   `--apply`; it never changes the old store), in this order:
+   1. Stop the old sync (mneme's `memo` hooks) on every machine, after a last
+      sync, so no note lands in the old store after it is copied.
+   2. `stores <staging folder>`, once on any machine: from a full clone of
+      the old store's remote, builds `<staging>/<host>/<owner>/notebooks` per
+      owner with `git filter-repo`, each notebook's history kept, `.source`
+      replaced by `.notebook`. Create each owner's repository and push the
+      store to it.
+   3. On every machine: clone each store into place
+      (`git clone --filter=blob:none --sparse <url> ~/<host>/<owner>/notebooks`),
+      run `local` (copies the notebooks of folders that are not repositories
+      and exist there into `<folder>/notes`), then `folio sync` and
+      `folio check`.
+   4. Review the notebooks the script lists as not migrated, then archive the
+      old store repository.
 4. Replace the `fzf` picker with the built-in one; drop `fzf`, `rg`, `gawk`.
 5. Update mneme (remove `memo.sh` and its hooks, `debrief` reads the sync
    status) and construct (Go, the binary, the systemd unit, the template).
+   Delete `migrate/`, `test/migrate.bats` and the Bash `folio` with its tests.
 
 ## Open questions
 
