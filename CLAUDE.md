@@ -17,7 +17,8 @@ the spec: keep it in sync with the code. Open items: the `todo` skill
 - Never name a client, private host, email or person from the user's work.
   Use placeholders (`<owner>`, `<hostname>`). Public projects and their URLs
   (fzf, ripgrep) are fine.
-- `pre-commit` (gitleaks, shellcheck, the bats suite) passes before every commit.
+- `pre-commit` (gitleaks, shellcheck, the bats suite, gofmt, go vet, go test)
+  passes before every commit.
 
 ## Git
 
@@ -25,7 +26,11 @@ Own repo: commit and push directly to `main` once all checks pass.
 
 ## Code
 
-- One Bash script, `folio`; runtime dependencies `fzf`, `rg`, `git`, optional `gawk`.
-- Tests: `bats test/` (bats-core, pinned in construct's bootstrap). They run
-  against a temporary `$HOME` and store, with local git repositories, never the
-  real store or the network.
+- In migration (`migration.md`): the Bash script `folio` (runtime dependencies
+  `fzf`, `rg`, `git`, optional `gawk`) stays the installed tool until the Go
+  rewrite (`cmd/folio`, `internal/`) replaces it.
+- Build the Go binary with `go build -o bin/folio ./cmd/folio`: a plain
+  `go build` would overwrite the Bash script at the repository root.
+- Tests: `bats test/` (bats-core, pinned in construct's bootstrap) for the Bash
+  script, `go test ./...` for Go. Both run against a temporary `$HOME`, with
+  local git repositories, never the real store or the network.

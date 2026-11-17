@@ -32,8 +32,8 @@ gets only the owners it needs.
 ### Stores and notebooks
 
 - A **store** is a folder named `notebooks/` holding a `.folio` marker,
-  placed by the user in the parent folder of the projects it serves, usually
-  by cloning the owner's notes repository:
+  placed by the user in an owner folder (`~/<host>/<owner>/`, the parent of
+  the projects it serves), usually by cloning the owner's notes repository:
   `git clone <url> ~/GitHub/<owner>/notebooks`. The marker is committed, so it
   comes with the clone; it tells a store from a project that happens to be
   called `notebooks`. `folio` never creates a store.
@@ -150,7 +150,7 @@ scripts and tests).
 - conflict files left by sync;
 - stores without a remote, with unpushed commits, or whose last sync failed
   (with the error), and a daemon whose last sync is older than an hour;
-- a parent folder holding more than one store marker;
+- a store marker in a folder not named `notebooks/`;
 - a folder inside a store that is neither a notebook nor in one, and a
   notebook inside another notebook.
 

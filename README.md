@@ -113,7 +113,8 @@ the store yourself (it is a plain folder).
 ## Develop
 
 `bats test/` runs the tests (bats-core), against a temporary `$HOME` and
-local git repositories. `pre-commit` runs them with gitleaks and shellcheck.
+local git repositories. `pre-commit` runs them with gitleaks and shellcheck,
+and the Go rewrite's checks (`gofmt`, `go vet`, `go test ./...`).
 
 ## Plan
 
