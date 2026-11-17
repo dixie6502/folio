@@ -101,7 +101,8 @@ automatically.
 - `folio mv <old> <new>` moves a folder and its notebook together: `git mv`
   where git tracks them (so history follows), else a plain move; across stores,
   copy then delete. When you already moved the folder by hand, it moves only
-  the notebook.
+  the notebook. In a sparse store, it first adds both notebooks to the
+  checkout.
 - `folio forget <folder>` deletes an orphan's notebook after a `y` on a prompt
   that counts every file it deletes. It refuses a notebook whose folder exists,
   and refuses to run without a terminal.

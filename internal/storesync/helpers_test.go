@@ -18,6 +18,7 @@ var (
 	isolate = testutil.Home
 	run     = testutil.Run
 	write   = testutil.Write
+	mkdir   = testutil.Mkdir
 )
 
 // read returns the content of the file path.

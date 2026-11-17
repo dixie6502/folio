@@ -90,3 +90,6 @@ func wantError(t *testing.T, err error, fragment string) {
 // yes and no answer every question.
 func yes(string) bool { return true }
 func no(string) bool  { return false }
+
+// outsideSparseStores is a no-op CheckOut: no store here is sparse.
+func outsideSparseStores(string) error { return nil }

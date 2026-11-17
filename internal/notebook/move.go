@@ -10,11 +10,17 @@ import (
 	"github.com/dixie6502/folio/internal/gitcmd"
 )
 
+// CheckOut puts a store notebook in its store's checkout, so git can read and
+// write it there: in a sparse store, it adds the notebook to the sparse set.
+// storesync.CheckOut is the implementation.
+type CheckOut func(notebook string) error
+
 // Move moves folder oldPath to newPath together with its store notebook, and
 // returns what it did. When the folder was already moved by hand (oldPath
 // gone, newPath present), it moves only the notebook. A local notes/ travels
-// inside its folder. Nothing moves unless both moves can be done.
-func (e Env) Move(oldPath, newPath string) ([]string, error) {
+// inside its folder. Nothing moves unless both moves can be done, but in a
+// sparse store both notebooks are first added to the checkout.
+func (e Env) Move(oldPath, newPath string, checkOut CheckOut) ([]string, error) {
 	oldPath, err := absolutePath(oldPath)
 	if err != nil {
 		return nil, err
@@ -32,11 +38,22 @@ func (e Env) Move(oldPath, newPath string) ([]string, error) {
 	}
 
 	oldNotebook, ok := e.storeNotebook(oldPath)
+	// A tracked notebook absent from disk lies outside a sparse checkout.
+	if ok && !exists(oldNotebook) && isTracked(oldNotebook) {
+		if err := checkOut(oldNotebook); err != nil {
+			return nil, err
+		}
+	}
 	moveNotebook := ok && IsNotebook(oldNotebook)
 	var newNotebook string
 	if moveNotebook {
 		if newNotebook, ok = e.storeNotebook(newPath); !ok {
 			return nil, fmt.Errorf("no %s/ in %s for the notebook %s", StoreDir, filepath.Dir(newPath), oldNotebook)
+		}
+		// Checked out first: in a sparse store, a tracked notebook can be
+		// absent from disk.
+		if err := checkOut(newNotebook); err != nil {
+			return nil, err
 		}
 		if exists(newNotebook) {
 			return nil, fmt.Errorf("%s already exists", newNotebook)

@@ -18,7 +18,7 @@ func TestMoveFolderAndNotebookInOneStore(t *testing.T) {
 	write(t, filepath.Join(notebook, "untracked.md"), "untracked\n")
 	newFolder := filepath.Join(owner, "new")
 
-	done, err := env.Move(oldFolder, newFolder)
+	done, err := env.Move(oldFolder, newFolder, outsideSparseStores)
 	if err != nil || len(done) != 2 {
 		t.Fatalf("got %v, %v", done, err)
 	}
@@ -40,7 +40,7 @@ func TestMoveNotebookAfterAManualMove(t *testing.T) {
 	notebookAt(t, filepath.Join(storeDir, "old"))
 	newFolder := mkdir(t, filepath.Join(owner, "new"))
 
-	if _, err := env.Move(filepath.Join(owner, "old"), newFolder); err != nil {
+	if _, err := env.Move(filepath.Join(owner, "old"), newFolder, outsideSparseStores); err != nil {
 		t.Fatal(err)
 	}
 	if !IsNotebook(filepath.Join(storeDir, "new")) || exists(filepath.Join(storeDir, "old")) {
@@ -56,7 +56,7 @@ func TestMoveAcrossStores(t *testing.T) {
 	storeTo := store(t, to)
 	oldFolder := mkdir(t, filepath.Join(from, "project"))
 
-	if _, err := env.Move(oldFolder, filepath.Join(to, "project")); err != nil {
+	if _, err := env.Move(oldFolder, filepath.Join(to, "project"), outsideSparseStores); err != nil {
 		t.Fatal(err)
 	}
 	if !IsNotebook(filepath.Join(storeTo, "project")) || exists(filepath.Join(from, StoreDir, "project")) {
@@ -71,7 +71,7 @@ func TestMoveTrackedSubfolderWithGitMv(t *testing.T) {
 	run(t, project, "git", "add", "docs")
 	run(t, project, "git", "commit", "-q", "-m", "docs")
 
-	if _, err := env.Move(filepath.Join(project, "docs"), filepath.Join(project, "guide")); err != nil {
+	if _, err := env.Move(filepath.Join(project, "docs"), filepath.Join(project, "guide"), outsideSparseStores); err != nil {
 		t.Fatal(err)
 	}
 	if status := run(t, project, "git", "status", "--porcelain"); !strings.Contains(status, "R  docs/a.md -> guide/a.md") {
@@ -84,7 +84,7 @@ func TestMoveCarriesALocalNotebook(t *testing.T) {
 	scratch := filepath.Join(env.Home, "scratch")
 	notebookAt(t, filepath.Join(scratch, "old", LocalDir))
 
-	if _, err := env.Move(filepath.Join(scratch, "old"), filepath.Join(scratch, "new")); err != nil {
+	if _, err := env.Move(filepath.Join(scratch, "old"), filepath.Join(scratch, "new"), outsideSparseStores); err != nil {
 		t.Fatal(err)
 	}
 	if !IsNotebook(filepath.Join(scratch, "new", LocalDir)) {
@@ -100,13 +100,13 @@ func TestMoveRefusesWithoutChangingAnything(t *testing.T) {
 	elsewhere := mkdir(t, filepath.Join(env.Home, "GitHub", "nostore"))
 	taken := mkdir(t, filepath.Join(owner, "taken"))
 
-	_, err := env.Move(project, filepath.Join(elsewhere, "project"))
+	_, err := env.Move(project, filepath.Join(elsewhere, "project"), outsideSparseStores)
 	wantError(t, err, "no notebooks/")
-	_, err = env.Move(project, taken)
+	_, err = env.Move(project, taken, outsideSparseStores)
 	wantError(t, err, "already exists")
-	_, err = env.Move(filepath.Join(owner, "missing"), filepath.Join(owner, "missing2"))
+	_, err = env.Move(filepath.Join(owner, "missing"), filepath.Join(owner, "missing2"), outsideSparseStores)
 	wantError(t, err, "neither")
-	_, err = env.Move(filepath.Join(owner, "missing"), taken)
+	_, err = env.Move(filepath.Join(owner, "missing"), taken, outsideSparseStores)
 	wantError(t, err, "no notebook to move")
 	if !isDir(project) || !IsNotebook(notebook) {
 		t.Fatal("a refused move changed something")

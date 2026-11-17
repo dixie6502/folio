@@ -89,7 +89,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if len(rest) != 2 {
 			return usageError(stderr, args)
 		}
-		done, err := env.Move(rest[0], rest[1])
+		done, err := env.Move(rest[0], rest[1], storesync.CheckOut)
 		printLines(stdout, done)
 		if err != nil {
 			return fail(stderr, err)

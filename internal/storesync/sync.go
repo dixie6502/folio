@@ -253,7 +253,7 @@ func (s Syncer) scan(store, revisions string) error {
 // new one can be committed) and every notebook whose folder exists on this
 // machine, plus the store's template. It never removes one.
 func growCheckout(store string) error {
-	if sparse, _ := gitcmd.Run(store, "config", "--bool", "core.sparseCheckout"); sparse != "true" {
+	if !isSparse(store) {
 		return nil
 	}
 	listed, err := gitcmd.Run(store, "sparse-checkout", "list")
@@ -283,6 +283,24 @@ func growCheckout(store string) error {
 	if len(add) == 0 {
 		return nil
 	}
-	_, err = gitcmd.Run(store, append([]string{"sparse-checkout", "add"}, add...)...)
+	_, err = gitcmd.Run(store, append([]string{"sparse-checkout", "add", "--"}, add...)...)
 	return err
+}
+
+// CheckOut adds a store notebook to its store's sparse checkout, so git can
+// read and write it there; a store that is not sparse is left alone. It
+// implements notebook.CheckOut.
+func CheckOut(notebookDir string) error {
+	store := filepath.Dir(notebookDir)
+	if !isSparse(store) {
+		return nil
+	}
+	_, err := gitcmd.Run(store, "sparse-checkout", "add", "--", filepath.Base(notebookDir))
+	return err
+}
+
+// isSparse reports whether store is a sparse checkout.
+func isSparse(store string) bool {
+	sparse, _ := gitcmd.Run(store, "config", "--bool", "core.sparseCheckout")
+	return sparse == "true"
 }
