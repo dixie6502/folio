@@ -59,7 +59,7 @@ func (e Env) template(store string) string {
 // staging folder, then moved into place, so a failure never leaves half a
 // notebook behind.
 func create(notebook, template string) (string, error) {
-	if isNotebook(notebook) {
+	if IsNotebook(notebook) {
 		return notebook, nil
 	}
 	if exists(notebook) {

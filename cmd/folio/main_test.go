@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dixie6502/folio/internal/testutil"
 )
 
 // folio runs the command line in dir with stdin and returns its exit code,
@@ -17,38 +19,11 @@ func folio(t *testing.T, dir, stdin string, args ...string) (int, string, string
 	return code, stdout.String(), stderr.String()
 }
 
-// tempHome points $HOME at a fresh folder and returns it, symlinks resolved.
-func tempHome(t *testing.T) string {
-	t.Helper()
-	for _, entry := range os.Environ() { // a git hook's GIT_* variables would redirect git
-		if key, _, _ := strings.Cut(entry, "="); strings.HasPrefix(key, "GIT_") {
-			t.Setenv(key, "")
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	home, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	return home
-}
+// tempHome gives the test a fresh, isolated home and returns it.
+var tempHome = testutil.Home
 
 // writeFile creates the empty file path, making its parents.
-func writeFile(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
+func writeFile(t *testing.T, path string) { testutil.Write(t, path, "") }
 
 func TestInitAndDir(t *testing.T) {
 	topic := filepath.Join(tempHome(t), "scratch", "topic")
@@ -94,6 +69,16 @@ func TestCheckExitCode(t *testing.T) {
 	writeFile(t, filepath.Join(home, "GitHub", "owner", "notebooks", ".folio"))
 	if code, stdout, _ := folio(t, home, "", "check"); code != 1 || !strings.Contains(stdout, "not a git repository") {
 		t.Fatalf("check with a store outside git: %d %q", code, stdout)
+	}
+}
+
+func TestSyncReportsEachStore(t *testing.T) {
+	home := tempHome(t)
+	store := filepath.Join(home, "GitHub", "owner", "notebooks")
+	writeFile(t, filepath.Join(store, ".folio"))
+
+	if code, stdout, _ := folio(t, home, "", "sync"); code != 0 || stdout != store+": skipped: not a git repository\n" {
+		t.Fatalf("sync: %d %q", code, stdout)
 	}
 }
 

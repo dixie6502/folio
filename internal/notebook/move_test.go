@@ -43,7 +43,7 @@ func TestMoveNotebookAfterAManualMove(t *testing.T) {
 	if _, err := env.Move(filepath.Join(owner, "old"), newFolder); err != nil {
 		t.Fatal(err)
 	}
-	if !isNotebook(filepath.Join(storeDir, "new")) || exists(filepath.Join(storeDir, "old")) {
+	if !IsNotebook(filepath.Join(storeDir, "new")) || exists(filepath.Join(storeDir, "old")) {
 		t.Fatal("notebook not moved")
 	}
 }
@@ -59,7 +59,7 @@ func TestMoveAcrossStores(t *testing.T) {
 	if _, err := env.Move(oldFolder, filepath.Join(to, "project")); err != nil {
 		t.Fatal(err)
 	}
-	if !isNotebook(filepath.Join(storeTo, "project")) || exists(filepath.Join(from, StoreDir, "project")) {
+	if !IsNotebook(filepath.Join(storeTo, "project")) || exists(filepath.Join(from, StoreDir, "project")) {
 		t.Fatal("notebook not moved across stores")
 	}
 }
@@ -87,7 +87,7 @@ func TestMoveCarriesALocalNotebook(t *testing.T) {
 	if _, err := env.Move(filepath.Join(scratch, "old"), filepath.Join(scratch, "new")); err != nil {
 		t.Fatal(err)
 	}
-	if !isNotebook(filepath.Join(scratch, "new", LocalDir)) {
+	if !IsNotebook(filepath.Join(scratch, "new", LocalDir)) {
 		t.Fatal("local notebook did not travel with its folder")
 	}
 }
@@ -108,7 +108,7 @@ func TestMoveRefusesWithoutChangingAnything(t *testing.T) {
 	wantError(t, err, "neither")
 	_, err = env.Move(filepath.Join(owner, "missing"), taken)
 	wantError(t, err, "no notebook to move")
-	if !isDir(project) || !isNotebook(notebook) {
+	if !isDir(project) || !IsNotebook(notebook) {
 		t.Fatal("a refused move changed something")
 	}
 }
@@ -130,7 +130,7 @@ func TestForget(t *testing.T) {
 	var asked string
 	_, err = env.Forget(gone, func(question string) bool { asked = question; return false })
 	wantError(t, err, "kept")
-	if !strings.Contains(asked, "1 note(s)") || !isNotebook(orphan) {
+	if !strings.Contains(asked, "1 note(s)") || !IsNotebook(orphan) {
 		t.Fatalf("question %q, or the notebook was not kept", asked)
 	}
 	_, err = env.Forget(gone, nil)

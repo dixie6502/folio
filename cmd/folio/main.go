@@ -1,17 +1,21 @@
 // Command folio is a notational-velocity switcher over one notebook per
-// folder. This Go rewrite is in progress: it has the notebook commands; the
-// switcher and sync still come from the Bash folio (see migration.md).
+// folder. This Go rewrite is in progress: it has the notebook commands and
+// sync; the switcher still comes from the Bash folio (see migration.md).
 package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/dixie6502/folio/internal/notebook"
+	"github.com/dixie6502/folio/internal/storesync"
 )
 
 const usage = `usage:
@@ -20,6 +24,8 @@ const usage = `usage:
     folio mv <old> <new>       move a folder and its notebook
     folio forget <folder>      delete an orphan's notebook, after confirmation
     folio check                report problems; exit 1 if any
+    folio sync                 sync every store with its remote, now
+    folio sync --daemon        keep syncing (run by the folio-sync service)
     folio help                 show this message
 `
 
@@ -67,12 +73,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case command == "check" && len(rest) == 0:
-		problems := env.Check()
-		printLines(stdout, problems)
-		if len(problems) > 0 {
-			return 1
-		}
-		return 0
+		return check(env, stdout)
+	case command == "sync" && len(rest) == 0:
+		return syncNow(env, stdout, stderr)
+	case command == "sync" && len(rest) == 1 && rest[0] == "--daemon":
+		return syncDaemon(env, stderr)
 	case command == "help" || command == "-h" || command == "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -84,6 +89,66 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, result)
+	return 0
+}
+
+// check prints the problems of the notebooks, then of their sync; it returns
+// 1 when there is any. A sync check that cannot run is itself reported, after
+// the notebook problems.
+func check(env notebook.Env, stdout io.Writer) int {
+	problems := env.Check()
+	stores, _ := env.Stores()
+	syncer, err := storesync.New()
+	if err == nil {
+		var syncProblems []string
+		syncProblems, err = syncer.Check(stores)
+		problems = append(problems, syncProblems...)
+	}
+	if err != nil {
+		problems = append(problems, "sync status unavailable: "+err.Error())
+	}
+	printLines(stdout, problems)
+	if len(problems) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// syncNow syncs every store once, printing each outcome; it returns 1 when
+// any store failed.
+func syncNow(env notebook.Env, stdout, stderr io.Writer) int {
+	syncer, err := storesync.New()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	code := 0
+	stores, _ := env.Stores()
+	for _, store := range stores {
+		outcome, err := syncer.Store(store)
+		if err != nil {
+			code = fail(stderr, fmt.Errorf("%s: %w", store, err))
+			continue
+		}
+		fmt.Fprintf(stdout, "%s: %s\n", store, outcome)
+	}
+	return code
+}
+
+// syncDaemon keeps every store synced until interrupted or terminated.
+func syncDaemon(env notebook.Env, stderr io.Writer) int {
+	syncer, err := storesync.New()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	stores := func() []string {
+		list, _ := env.Stores()
+		return list
+	}
+	syncer.Daemon(ctx, stores, func(format string, args ...any) {
+		fmt.Fprintf(stderr, format+"\n", args...)
+	})
 	return 0
 }
 

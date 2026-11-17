@@ -19,7 +19,7 @@ func (e Env) Forget(folder string, confirm Confirm) (string, error) {
 		return "", fmt.Errorf("%s exists: only an orphan's notebook is forgotten", folder)
 	}
 	notebook, ok := e.storeNotebook(folder)
-	if !ok || !isNotebook(notebook) {
+	if !ok || !IsNotebook(notebook) {
 		return "", fmt.Errorf("%s has no notebook", folder)
 	}
 	question := fmt.Sprintf("delete %s and its %d note(s)?", notebook, countNotes(notebook))

@@ -10,9 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/dixie6502/folio/internal/gitcmd"
 )
 
 // Names of the folders and markers that make up the layout.
@@ -77,17 +78,17 @@ func (e Env) Find(dir string) (string, error) {
 	here := e.locate(dir)
 	if here.store != "" {
 		for d := here.dir; d != here.store; d = filepath.Dir(d) {
-			if isNotebook(d) {
+			if IsNotebook(d) {
 				return d, nil
 			}
 		}
 		return "", fmt.Errorf("inside the store %s, but not in a notebook", here.store)
 	}
-	if here.notebook != "" && isNotebook(here.notebook) {
+	if here.notebook != "" && IsNotebook(here.notebook) {
 		return here.notebook, nil
 	}
 	for d := here.dir; d != e.Home && d != filepath.Dir(d); d = filepath.Dir(d) {
-		if local := filepath.Join(d, LocalDir); isNotebook(local) {
+		if local := filepath.Join(d, LocalDir); IsNotebook(local) {
 			return local, nil
 		}
 	}
@@ -109,6 +110,10 @@ func (e Env) storeNotebook(ref string) (notebook string, ok bool) {
 func folderOf(notebook string) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(notebook)), filepath.Base(notebook))
 }
+
+// HasFolder reports whether the folder a store notebook belongs to exists on
+// this machine (it is no orphan).
+func HasFolder(notebook string) bool { return exists(folderOf(notebook)) }
 
 // isStore reports whether dir is a store: ~/<host>/<owner>/notebooks holding
 // the store marker.
@@ -164,7 +169,7 @@ func visibleDirs(dir string) []string {
 // checkout of the repository dir lies in (so a worktree shares its notebook),
 // else dir itself; inRepo tells which.
 func referenceFolder(dir string) (ref string, inRepo bool) {
-	out, err := git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel")
+	out, err := gitcmd.Run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel")
 	if err != nil {
 		return dir, false
 	}
@@ -178,8 +183,8 @@ func referenceFolder(dir string) (ref string, inRepo bool) {
 	return physical(top), true // a submodule: its git dir lies in the parent's
 }
 
-// isNotebook reports whether dir holds the notebook marker.
-func isNotebook(dir string) bool { return isFile(filepath.Join(dir, NotebookMarker)) }
+// IsNotebook reports whether dir holds the notebook marker.
+func IsNotebook(dir string) bool { return isFile(filepath.Join(dir, NotebookMarker)) }
 
 // isFile reports whether path is a regular file.
 func isFile(path string) bool {
@@ -220,17 +225,4 @@ func physical(path string) string {
 		return path
 	}
 	return filepath.Join(physical(parent), filepath.Base(path))
-}
-
-// git runs git in dir and returns its trimmed output; on failure the error
-// carries git's message.
-func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
 }

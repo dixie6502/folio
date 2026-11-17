@@ -98,14 +98,6 @@ func TestPhysicalKeepsAMissingTail(t *testing.T) {
 	}
 }
 
-func TestGitErrorCarriesMessage(t *testing.T) {
-	env := newTestEnv(t)
-	_, err := git(env.Home, "rev-parse", "--show-toplevel")
-	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
-		t.Fatalf("got %v, want git's message", err)
-	}
-}
-
 func TestStoreOnlyInAnOwnerFolder(t *testing.T) {
 	env := newTestEnv(t)
 	scratch := filepath.Join(env.Home, "scratch")

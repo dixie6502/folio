@@ -118,9 +118,11 @@ scripts and tests).
 ### Sync
 
 - `folio sync` syncs every store found at `~/*/*/notebooks/.folio` that has a
-  remote; local notebooks are never synced. `folio sync --daemon` runs the
-  loop below and is started by a systemd user unit, `folio-sync`.
-  `folio sync --now` asks the daemon for an immediate cycle.
+  remote, at once; local notebooks are never synced. `folio sync --daemon`
+  runs the loop below and is started by a systemd user unit, `folio-sync`
+  (`contrib/folio-sync.service`). Both take the same per-store lock, so a
+  manual sync and the daemon never overlap: a sync that waits 30 s in vain
+  skips the store. Every git command times out after 2 minutes.
 - Each cycle, per store, under a lock:
   1. **Checkout**: the store is a sparse clone; a notebook is added to the
      sparse set when its folder exists on this machine. The set only grows.
@@ -132,8 +134,9 @@ scripts and tests).
      refuses when a file changed meanwhile; the cycle then retries later.
   5. **Conflict**: the remote version stays in place, the local one is kept
      beside it as `<name>.conflict-<host>-<UTC time>.md`; a deleted file
-     against a modified one keeps the modified file. Sync never stops on a
-     conflict.
+     against a modified one keeps the modified file; a file against a folder
+     keeps both, the file renamed `<name>~<side>` (git's own answer). Sync
+     never stops on a conflict.
   6. **Scan** unpushed commits with `gitleaks`; a finding, or `gitleaks`
      missing, blocks the push and leaves the commits local.
   7. **Push**.
@@ -141,8 +144,9 @@ scripts and tests).
   when the clock jumps (resume from suspend). Polling, no file watcher.
 - History is never rewritten.
 - Status in `~/.cache/folio/status.json` (`$XDG_CACHE_HOME` honoured), per
-  store: last successful sync, unpushed commits, conflict files, orphans, last
-  error. Read by mneme's `debrief`.
+  store: the last successful sync and the last error, with its time. A skipped
+  store (no git, no remote) and a merge to retry are not recorded. `folio
+  check` reads it; mneme's `debrief` can too.
 
 ### Health check
 
@@ -150,8 +154,9 @@ scripts and tests).
 
 - orphan notebooks (folder gone), with the `folio mv` or `folio forget` to run;
 - conflict files left by sync;
-- stores without a remote, with unpushed commits, or whose last sync failed
-  (with the error), and a daemon whose last sync is older than an hour;
+- stores without git, a remote or an upstream branch, with unpushed commits,
+  never synced, last synced over an hour ago, or whose last sync failed
+  (with the error);
 - a store marker in a folder not named `notebooks/`;
 - a folder inside a store that is neither a notebook nor in one, and a
   notebook inside another notebook.
@@ -169,7 +174,7 @@ folio init [--local]       create the current folder's notebook
 folio mv <old> <new>       move a folder and its notebook
 folio forget <folder>      delete an orphan notebook
 folio check                report problems; exit 1 if any
-folio sync [--now|--daemon]
+folio sync [--daemon]
 ```
 
 ## Migration

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/dixie6502/folio/internal/gitcmd"
 )
 
 // Move moves folder oldPath to newPath together with its store notebook, and
@@ -30,7 +32,7 @@ func (e Env) Move(oldPath, newPath string) ([]string, error) {
 	}
 
 	oldNotebook, ok := e.storeNotebook(oldPath)
-	moveNotebook := ok && isNotebook(oldNotebook)
+	moveNotebook := ok && IsNotebook(oldNotebook)
 	var newNotebook string
 	if moveNotebook {
 		if newNotebook, ok = e.storeNotebook(newPath); !ok {
@@ -68,7 +70,7 @@ func move(src, dst string) error {
 		return fmt.Errorf("%s does not exist", filepath.Dir(dst))
 	}
 	if isTracked(src) && sameRepo(src, dst) {
-		_, err := git(filepath.Dir(src), "mv", "--", filepath.Base(src), dst)
+		_, err := gitcmd.Run(filepath.Dir(src), "mv", "--", filepath.Base(src), dst)
 		return err
 	}
 	err := os.Rename(src, dst)
@@ -83,17 +85,17 @@ func move(src, dst string) error {
 
 // isTracked reports whether git tracks path or anything under it.
 func isTracked(path string) bool {
-	_, err := git(filepath.Dir(path), "ls-files", "--error-unmatch", "--", filepath.Base(path))
+	_, err := gitcmd.Run(filepath.Dir(path), "ls-files", "--error-unmatch", "--", filepath.Base(path))
 	return err == nil
 }
 
 // sameRepo reports whether src and dst's parent lie in one repository's work
 // tree.
 func sameRepo(src, dst string) bool {
-	srcTop, err := git(filepath.Dir(src), "rev-parse", "--show-toplevel")
+	srcTop, err := gitcmd.Run(filepath.Dir(src), "rev-parse", "--show-toplevel")
 	if err != nil {
 		return false
 	}
-	dstTop, err := git(filepath.Dir(dst), "rev-parse", "--show-toplevel")
+	dstTop, err := gitcmd.Run(filepath.Dir(dst), "rev-parse", "--show-toplevel")
 	return err == nil && srcTop == dstTop
 }

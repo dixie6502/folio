@@ -1,77 +1,29 @@
 package notebook
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dixie6502/folio/internal/testutil"
 )
 
-// newTestEnv returns an Env over a fresh temporary home, with git isolated
-// from the user's configuration.
+// Helpers shared with the other packages' tests.
+var (
+	run   = testutil.Run
+	write = testutil.Write
+	mkdir = testutil.Mkdir
+)
+
+// newTestEnv returns an Env over a fresh, isolated home.
 func newTestEnv(t *testing.T) Env {
 	t.Helper()
-	clearGitEnv(t)
-	home := physical(t.TempDir())
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_AUTHOR_NAME", "test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
-	t.Setenv("GIT_COMMITTER_NAME", "test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
+	testutil.Home(t)
 	env, err := NewEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return env
-}
-
-// clearGitEnv unsets every inherited GIT_* variable (a git hook exports
-// GIT_INDEX_FILE and others, which would redirect the tests' git commands),
-// restoring them when the test ends.
-func clearGitEnv(t *testing.T) {
-	t.Helper()
-	for _, entry := range os.Environ() {
-		if key, _, _ := strings.Cut(entry, "="); strings.HasPrefix(key, "GIT_") {
-			t.Setenv(key, "")
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-}
-
-// run runs a command in dir and fails the test on error.
-func run(t *testing.T, dir string, name string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// mkdir creates the folder path (and its parents) and returns it.
-func mkdir(t *testing.T, path string) string {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// write creates the file path with content, making its parents.
-func write(t *testing.T, path, content string) {
-	t.Helper()
-	mkdir(t, filepath.Dir(path))
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // repo creates a git repository at path with one commit and returns path.

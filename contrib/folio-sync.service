@@ -1,0 +1,18 @@
+# folio-sync: keeps folio's notebook stores synced with their remotes.
+# Install: copy to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now folio-sync
+# Logs: journalctl --user -u folio-sync
+[Unit]
+Description=folio notebook sync
+
+[Service]
+ExecStart=%h/.local/bin/folio sync --daemon
+# git, and gitleaks (installed by mise), must be on PATH: no login shell here.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=30
+# A git command may run up to 2 minutes: let it finish on stop.
+TimeoutStopSec=150
+
+[Install]
+WantedBy=default.target
