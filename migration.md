@@ -1,226 +1,37 @@
-# Migration: stores beside the clones, sync built in, Go
+# Migration: from the central store to the owners' stores
 
-Draft spec, decided unless listed under Open questions. `README.md` describes
-the current Bash `folio` and stays in sync with the code; this file describes
-the target. Once implemented, its content moves into `README.md` and this file
-is deleted.
+The Bash folio kept every notebook in one store, `~/memo` (`$FOLIO_HOME`),
+synced by mneme's `memo` hooks. The Go folio (see `README.md`) keeps them in a
+`notebooks/` store per owner, or a local `notes/`, and syncs them itself. This
+file, `migrate/` and `test/migrate.bats` go once every machine is migrated.
 
-Goal: notes easy to reach from the folder you work in, never inside a project
-repository (kept out of an LLM's project context, no second version history in
-the project), synced between machines, with one store per owner so a machine
-gets only the owners it needs.
+`migrate/stores.sh` is a dry run unless given `--apply`, never changes the old
+store, and ends with every notebook it leaves behind and why (to review before
+archiving the old store). `migrate/legacy-folio` is the Bash folio, kept only
+for the script's tests.
 
-## Decided
+## Steps
 
-- `folio` stays a switcher (filter, open, create) plus a few non-interactive
-  notebook commands. No link commands: links belong to wikijump.vim.
-- Rewritten in Go, as one binary. Its own picker replaces `fzf`; reading notes
-  and tags replaces `rg` and `gawk`. Runtime dependencies: `git`, plus
-  `gitleaks` to push. Go modules: `golang.org/x/term` (raw terminal) and
-  `github.com/mattn/go-runewidth` (display width of note names), pinned.
-- Sync is part of the binary (`folio sync`), so the store rules live in one
-  place. Only the sync code runs git beyond reading a repository's top level.
-- No ids, no origin parsing, no `.source` record: a notebook is found by its
-  path.
-- `folio` knows nothing of `TODO.md`'s format, frontmatter or editor
-  conventions; a template carries those.
-- The command-line contract used by other tools (`folio --dir`, `folio init`)
-  keeps its shape.
-
-## Spec
-
-### Stores and notebooks
-
-- A **store** is a folder named `notebooks/` holding a `.folio` marker,
-  placed by the user in an owner folder (`~/<host>/<owner>/`, the parent of
-  the projects it serves), usually by cloning the owner's notes repository:
-  `git clone <url> ~/GitHub/<owner>/notebooks`. The marker is committed, so it
-  comes with the clone; it tells a store from a project that happens to be
-  called `notebooks`. `folio` never creates a store.
-- A **notebook** is a folder holding a `.notebook` marker, either inside a
-  store or as a **local notebook**: a `notes/` folder inside the folder it
-  serves, never synced.
-- Layout:
-
-  ```
-  ~/.config/folio/template/        global template, copied into new notebooks
-  ~/GitHub/<owner>/
-    <repo>/                        a project clone: no notes inside
-    notebooks/                     store, a git clone with a remote
-      .folio                       store marker
-      .template/                   optional, overrides the global template
-      <repo>/                      notebook of ~/GitHub/<owner>/<repo>
-        .notebook
-        TODO.md
-        todo/
-        <note>.md
-  ~/scratch/<topic>/
-    notes/                         local notebook of ~/scratch/<topic>
-      .notebook
-      <note>.md
-  ```
-
-### Current notebook
-
-The folder of reference is the git top level when inside a repository (for a
-worktree, the main checkout, from `git rev-parse --git-common-dir`), else the
-current folder. Its notebook is, in order:
-
-1. `<parent>/notebooks/<name>/`, when `<parent>` (the reference folder's
-   parent) holds a store and that notebook exists;
-2. else the nearest `notes/` holding `.notebook`, in the current folder or a
-   parent, up to `~`;
-3. inside a store's notebook: that notebook.
-
-Otherwise `folio` refuses: there is no default notebook.
-
-### `folio init`
-
-- Parent holds a store: creates `<parent>/notebooks/<name>/`, its marker and
-  the template; prints the notebook.
-- No store in the parent: warns and asks
-  `no notebooks/ in <parent>: create local notes/ here instead? [y/N]`,
-  adding `notes/ will sit inside the repository` when the folder is a
-  repository.
-- `folio init --local` creates the local notebook without asking.
-- Without a terminal, `folio init` without `--local` fails with a message
-  naming `--local`, so a calling tool never answers on the user's behalf.
-
-### Template
-
-The nearest of the store's `.template/` and `~/.config/folio/template/`
-(`$XDG_CONFIG_HOME` honoured) is copied into each new notebook, never
-overwriting. Missing: the notebook starts empty.
-
-### Switcher
-
-As in `README.md`, with the built-in picker drawn inline (up to 40% of the
-terminal) on `/dev/tty`:
-
-- Filter as you type. Each word of the query must appear in a note's name or
-  `#tags` as a contiguous substring; case is ignored unless the query has an
-  upper-case letter. Best first: words matching at the start of a name part,
-  then earlier, then shorter names; ties keep path order.
-- Keys: **Enter** opens; **Ctrl-N** creates a note named by the query (with
-  `-c`, **Enter** creates when nothing matches, and Ctrl-N moves down);
-  Up/Ctrl-K/Ctrl-P and Down/Ctrl-J move; Backspace, Ctrl-W (word) and Ctrl-U
-  (all) edit the query; pasted text joins it on one line; Esc, Ctrl-C or
-  Ctrl-G cancel.
-- `.md` is implicit, `folder/name` creates in a subfolder, a case-only
-  variant of an existing path reuses it, and a name with a part starting
-  with `_` or `.` is refused (the listing would never show it). Files and
-  folders starting with `_` or `.` are not listed; `.gitignore` is not read.
-- `--all` filters the notes of every notebook in every store, named
-  `<owner>/<notebook>/<note>` (`<host>/<owner>/…` when the owner has stores
-  under two hosts); it never creates. `folio --filter <query>`
-  prints the current notebook's matches, best first, one name per line.
-- `$EDITOR` (split on spaces, so it may hold flags, e.g. `code -w`), else
-  `vim`, opens the note on the terminal, whatever folio's stdin and stdout.
-- Pasted text joins the query on one line, without control characters; a
-  created note's name is the query trimmed. A note or folder that cannot be
-  read is skipped, never failing the whole listing.
-
-### Moving and forgetting
-
-- **Orphan**: a notebook whose folder no longer exists on this machine. It
-  stays on disk and is reported; nothing is hidden or deleted automatically.
-- `folio mv <old> <new>` moves a folder and its notebook together: `git mv`
-  for a folder tracked inside a repository, else `mv`; `git mv` for a notebook
-  moving within its store; copy then delete across stores. When the folder
-  was already moved by hand, it moves only the notebook.
-- `folio forget <folder>` deletes an orphan's notebook and every note in it,
-  after a `y` on a prompt that counts every file it deletes. It refuses a notebook whose folder exists, and
-  refuses to run without a terminal, so a calling tool never confirms a
-  deletion on the user's behalf.
-
-### Sync
-
-- `folio sync` syncs every store found at `~/*/*/notebooks/.folio` that has a
-  remote, at once; local notebooks are never synced. `folio sync --daemon`
-  runs the loop below and is started by a systemd user unit, `folio-sync`
-  (`contrib/folio-sync.service`). Both take the same per-store lock, so a
-  manual sync and the daemon never overlap: a sync that waits 30 s in vain
-  skips the store. Every git command times out after 2 minutes.
-- Each cycle, per store, under a lock:
-  1. **Checkout**: the store is a sparse clone; a notebook is added to the
-     sparse set when its folder exists on this machine. The set only grows.
-  2. **Commit** every change after 60 s without one, as
-     `<host> · <UTC time>`.
-  3. **Fetch**, then compute the merge with
-     `git merge-tree --write-tree HEAD @{upstream}`, without touching files.
-  4. **Update**: create the merge commit, then `git reset --keep` to it, which
-     refuses when a file changed meanwhile; the cycle then retries later.
-  5. **Conflict**: the remote version stays in place, the local one is kept
-     beside it as `<name>.conflict-<host>-<UTC time>.md`; a deleted file
-     against a modified one keeps the modified file; a file against a folder
-     keeps both, the file renamed `<name>~<side>` (git's own answer). Sync
-     never stops on a conflict.
-  6. **Scan** unpushed commits with `gitleaks`; a finding, or `gitleaks`
-     missing, blocks the push and leaves the commits local.
-  7. **Push**.
-- Timing: `git status` every 10 s, fetch every 3 min, and a full cycle at once
-  when the clock jumps (resume from suspend). Polling, no file watcher.
-- History is never rewritten.
-- Status in `~/.cache/folio/status.json` (`$XDG_CACHE_HOME` honoured), per
-  store: the last successful sync and the last error, with its time. A skipped
-  store (no git, no remote) and a merge to retry are not recorded. `folio
-  check` reads it; mneme's `debrief` can too.
-
-### Health check
-
-`folio check` reports, from disk and the sync status, and exits 1 if any:
-
-- orphan notebooks (folder gone), with the `folio mv` or `folio forget` to run;
-- conflict files left by sync;
-- stores without git, a remote or an upstream branch, with unpushed commits,
-  never synced, last synced over an hour ago, or whose last sync failed
-  (with the error);
-- a store marker in a folder not named `notebooks/`;
-- a folder inside a store that is neither a notebook nor in one, and a
-  notebook inside another notebook.
-
-It changes nothing.
-
-### Commands
-
-```
-folio [-c] [<query>]       switch among the current notebook's notes
-folio --all [<query>]      switch among every store's notes (open only)
-folio --filter <query>     print the matches, ranked
-folio --dir                print the current notebook's folder
-folio init [--local]       create the current folder's notebook
-folio mv <old> <new>       move a folder and its notebook
-folio forget <folder>      delete an orphan notebook
-folio check                report problems; exit 1 if any
-folio sync [--daemon]
-```
-
-## Migration
-
-1. Write the Go skeleton: notebook lookup, `--dir`, `init`, `mv`, `forget`,
-   `check`, with tests (Go unit tests; the bats suite as acceptance tests).
-2. Add `folio sync` and the systemd unit.
-3. Migrate the existing store with `migrate/stores.sh` (dry run unless
-   `--apply`; it never changes the old store), in this order:
-   1. Stop the old sync (mneme's `memo` hooks) on every machine, after a last
-      sync, so no note lands in the old store after it is copied.
-   2. `stores <staging folder>`, once on any machine: from a full clone of
-      the old store's remote, builds `<staging>/<host>/<owner>/notebooks` per
-      owner with `git filter-repo`, each notebook's history kept, `.source`
-      replaced by `.notebook`. Create each owner's repository and push the
-      store to it.
-   3. On every machine: clone each store into place
-      (`git clone --filter=blob:none --sparse <url> ~/<host>/<owner>/notebooks`),
-      run `local` (copies the notebooks of folders that are not repositories
-      and exist there into `<folder>/notes`), then `folio sync` and
-      `folio check`.
-   4. Review the notebooks the script lists as not migrated, then archive the
-      old store repository.
-4. Replace the `fzf` picker with the built-in one; drop `fzf`, `rg`, `gawk`.
-5. Update mneme (remove `memo.sh` and its hooks, `debrief` reads the sync
-   status) and construct (Go, the binary, the systemd unit, the template).
-   Delete `migrate/`, `test/migrate.bats` and the Bash `folio` with its tests.
-
-## Open questions
-
-None at present.
+1. **On every machine, stop the old sync.** Let `~/memo` sync one last time (a
+   Claude session start or end, or commit and push it by hand), then update
+   mneme's plugins (`claude plugin marketplace update mneme`), whose `memo` no
+   longer syncs. From here on, no note may be written to `~/memo`.
+2. **On every machine, install the Go folio** with construct's bootstrap: the
+   binary, the `folio-sync` service and the global template. Until step 4,
+   `/todo` and `/note` find no notebook.
+3. **Once, on any machine, build the stores:**
+   `migrate/stores.sh stores <staging folder>`, then again with `--apply`.
+   From a full clone of the old store's remote it builds
+   `<staging>/<host>/<owner>/notebooks` per owner, each notebook's history kept
+   (`git filter-repo`), `.source` replaced by `.notebook`. For each store,
+   create the owner's private repository (`<owner>/notebooks`), then
+   `git -C <store> remote add origin <url> && git -C <store> push -u origin HEAD`.
+4. **On every machine, put the notes in place:**
+   - clone each store this machine needs:
+     `git clone --filter=blob:none --sparse <url> ~/<host>/<owner>/notebooks`;
+   - `migrate/stores.sh local`, then with `--apply`: copies the notebooks of
+     this machine's folders that are not repositories into `<folder>/notes`;
+   - `folio sync`, then `folio check`.
+5. **Review** the notebooks the script lists as not migrated, then archive the
+   old store's repository and delete `~/memo`.
+6. **Delete** this file, `migrate/` and `test/migrate.bats`.

@@ -1,6 +1,6 @@
 // Command folio is a notational-velocity switcher over one notebook per
 // folder, with a few notebook commands and the sync of notebook stores (see
-// migration.md, the spec until it moves into README.md).
+// README.md, the spec).
 package main
 
 import (

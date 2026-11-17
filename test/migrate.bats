@@ -5,7 +5,7 @@
 
 setup() {
   MIGRATE="$BATS_TEST_DIRNAME/../migrate/stores.sh"
-  FOLIO="$BATS_TEST_DIRNAME/../folio"
+  FOLIO="$BATS_TEST_DIRNAME/../migrate/legacy-folio"
   export HOME="$BATS_TEST_TMPDIR/home"
   # A git hook exports these, and git obeys them before -C: never touch the
   # repository the suite runs from.
