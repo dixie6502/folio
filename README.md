@@ -117,9 +117,9 @@ local git repositories. `pre-commit` runs them with gitleaks and shellcheck.
 
 ## Plan
 
-Migrate `folio` to a Go binary — motivated only by shedding the `fzf`/`rg`
-runtime dependency into one self-contained executable. The behaviour
-above is unchanged by that migration.
+A Go rewrite with stores beside the clones and built-in sync, specified in
+`migration.md`. Until it lands, this file describes the current Bash
+`folio`.
 
 ## Example
 
