@@ -7,17 +7,6 @@ repos:
         entry: gitleaks git --pre-commit --staged --redact --no-banner
         language: system
         pass_filenames: false
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
-        language: system
-        types: [shell]
-      - id: bats
-        name: bats test/
-        entry: bats test/
-        language: system
-        pass_filenames: false
-        always_run: true
       - id: gofmt
         name: gofmt
         entry: sh -c 'unformatted=$(gofmt -l "$@"); [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }' --

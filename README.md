@@ -186,13 +186,7 @@ without a passphrase, or a credential helper).
 
 `go test ./...` runs the tests, against a temporary `$HOME` and local git
 repositories, never the real stores or the network. `pre-commit` runs them with
-`gofmt`, `go vet`, gitleaks, shellcheck and `bats test/` (the migration
-script's tests). Build into `bin/` (git-ignored).
-
-## Migrating from the central store
-
-Until every machine has moved its notes from the old `~/memo` store, see
-`migration.md` and `migrate/stores.sh`; both go once that is done.
+`gofmt`, `go vet` and gitleaks. Build into `bin/` (git-ignored).
 
 ## Example
 
