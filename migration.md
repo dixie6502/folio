@@ -16,7 +16,8 @@ gets only the owners it needs.
   notebook commands. No link commands: links belong to wikijump.vim.
 - Rewritten in Go, as one binary. Its own picker replaces `fzf`; reading notes
   and tags replaces `rg` and `gawk`. Runtime dependencies: `git`, plus
-  `gitleaks` to push.
+  `gitleaks` to push. Go modules: `golang.org/x/term` (raw terminal) and
+  `github.com/mattn/go-runewidth` (display width of note names), pinned.
 - Sync is part of the binary (`folio sync`), so the store rules live in one
   place. Only the sync code runs git beyond reading a repository's top level.
 - No ids, no origin parsing, no `.source` record: a notebook is found by its
@@ -141,6 +142,20 @@ scripts and tests).
   store: last successful sync, unpushed commits, conflict files, orphans, last
   error. Read by mneme's `debrief`.
 
+### Health check
+
+`folio check` reports, from disk and the sync status, and exits 1 if any:
+
+- orphan notebooks (folder gone), with the `folio mv` or `folio forget` to run;
+- conflict files left by sync;
+- stores without a remote, with unpushed commits, or whose last sync failed
+  (with the error), and a daemon whose last sync is older than an hour;
+- a parent folder holding more than one store marker;
+- a folder inside a store that is neither a notebook nor in one, and a
+  notebook inside another notebook.
+
+It changes nothing.
+
 ### Commands
 
 ```
@@ -151,13 +166,14 @@ folio --dir                print the current notebook's folder
 folio init [--local]       create the current folder's notebook
 folio mv <old> <new>       move a folder and its notebook
 folio forget <folder>      delete an orphan notebook
+folio check                report problems; exit 1 if any
 folio sync [--now|--daemon]
 ```
 
 ## Migration
 
 1. Write the Go skeleton: notebook lookup, `--dir`, `init`, `mv`, `forget`,
-   with tests (Go unit tests; the bats suite as acceptance tests).
+   `check`, with tests (Go unit tests; the bats suite as acceptance tests).
 2. Add `folio sync` and the systemd unit.
 3. Migrate the existing store with a one-off script: each notebook moves from
    the current store to `<parent>/notebooks/<name>/` (stores) or
@@ -170,8 +186,4 @@ folio sync [--now|--daemon]
 
 ## Open questions
 
-- Go modules for the picker (`golang.org/x/term`, a character-width package):
-  to approve before adding.
-- `git filter-repo` for the migration: to approve before installing.
-- Whether a report command (orphans, conflict files, stores without a remote)
-  is needed beside the sync status, or `debrief` is enough.
+None at present.
