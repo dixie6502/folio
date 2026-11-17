@@ -1,6 +1,6 @@
 // Command folio is a notational-velocity switcher over one notebook per
-// folder. This Go rewrite is in progress: it has the notebook commands and
-// sync; the switcher still comes from the Bash folio (see migration.md).
+// folder, with a few notebook commands and the sync of notebook stores (see
+// migration.md, the spec until it moves into README.md).
 package main
 
 import (
@@ -19,6 +19,13 @@ import (
 )
 
 const usage = `usage:
+    folio [-c] [<query>]       filter the current notebook's notes; enter opens,
+                                 ctrl-n creates the typed name (with -c, enter
+                                 creates it when nothing matches)
+    folio [-c] -- <query>      the same, for a query that is a command name or
+                                 starts with '-'
+    folio --all [<query>]      filter every store's notes; never creates
+    folio --filter <query>     print the current notebook's matches, best first
     folio --dir                print the current notebook's folder
     folio init [--local]       create the current folder's notebook
     folio mv <old> <new>       move a folder and its notebook
@@ -55,41 +62,70 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		ask = func(question string) bool { return confirm(input, stderr, question) }
 	}
 
+	// A first word naming a command runs it, and with wrong arguments gets
+	// the usage; anything else is the switcher's.
 	var result string
-	switch {
-	case command == "--dir" && len(rest) == 0:
+	switch command {
+	case "--dir":
+		if len(rest) != 0 {
+			return usageError(stderr, args)
+		}
 		result, err = env.Find(cwd)
-	case command == "init" && len(rest) == 0:
-		result, err = env.Init(cwd, false, ask)
-	case command == "init" && len(rest) == 1 && rest[0] == "--local":
-		result, err = env.Init(cwd, true, nil)
-	case command == "forget" && len(rest) == 1:
+	case "init":
+		switch {
+		case len(rest) == 0:
+			result, err = env.Init(cwd, false, ask)
+		case len(rest) == 1 && rest[0] == "--local":
+			result, err = env.Init(cwd, true, nil)
+		default:
+			return usageError(stderr, args)
+		}
+	case "forget":
+		if len(rest) != 1 {
+			return usageError(stderr, args)
+		}
 		result, err = env.Forget(rest[0], ask)
-	case command == "mv" && len(rest) == 2:
+	case "mv":
+		if len(rest) != 2 {
+			return usageError(stderr, args)
+		}
 		done, err := env.Move(rest[0], rest[1])
 		printLines(stdout, done)
 		if err != nil {
 			return fail(stderr, err)
 		}
 		return 0
-	case command == "check" && len(rest) == 0:
+	case "check":
+		if len(rest) != 0 {
+			return usageError(stderr, args)
+		}
 		return check(env, stdout)
-	case command == "sync" && len(rest) == 0:
-		return syncNow(env, stdout, stderr)
-	case command == "sync" && len(rest) == 1 && rest[0] == "--daemon":
-		return syncDaemon(env, stderr)
-	case command == "help" || command == "-h" || command == "--help":
+	case "sync":
+		switch {
+		case len(rest) == 0:
+			return syncNow(env, stdout, stderr)
+		case len(rest) == 1 && rest[0] == "--daemon":
+			return syncDaemon(env, stderr)
+		default:
+			return usageError(stderr, args)
+		}
+	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
 	default:
-		fmt.Fprint(stderr, usage)
-		return fail(stderr, errors.New("unknown command or arguments: "+strings.Join(args, " ")))
+		return switcher(env, cwd, args, stdout, stderr)
 	}
 	if err != nil {
 		return fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, result)
 	return 0
+}
+
+// usageError prints the usage and refuses args.
+func usageError(stderr io.Writer, args []string) int {
+	fmt.Fprint(stderr, usage)
+	return fail(stderr, errors.New("unknown arguments: "+strings.Join(args, " ")))
 }
 
 // check prints the problems of the notebooks, then of their sync; it returns

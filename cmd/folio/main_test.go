@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dixie6502/folio/internal/notebook"
 	"github.com/dixie6502/folio/internal/testutil"
 )
 
@@ -87,7 +88,17 @@ func TestUsage(t *testing.T) {
 	if code, stdout, _ := folio(t, home, "", "help"); code != 0 || !strings.Contains(stdout, "usage:") {
 		t.Fatalf("help: %d %q", code, stdout)
 	}
-	if code, _, stderr := folio(t, home, "", "init", "extra"); code != 1 || !strings.Contains(stderr, "unknown command") {
+	if code, _, stderr := folio(t, home, "", "init", "extra"); code != 1 || !strings.Contains(stderr, "unknown arguments") {
 		t.Fatalf("bad arguments: %d %q", code, stderr)
 	}
+}
+
+// mustEnv returns the notebook environment of the test's home.
+func mustEnv(t *testing.T) notebook.Env {
+	t.Helper()
+	env, err := notebook.NewEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
 }

@@ -31,7 +31,8 @@ Own repo: commit and push directly to `main` once all checks pass.
 - In migration (`migration.md`): the Bash script `folio` (runtime dependencies
   `fzf`, `rg`, `git`, optional `gawk`) stays the installed tool until the Go
   rewrite (`cmd/folio`, `internal/`; runtime dependencies `git`, `gitleaks` to
-  push) replaces it. `README.md` describes the Bash script until then.
+  push; Go modules `golang.org/x/term`, `github.com/mattn/go-runewidth`)
+  replaces it. `README.md` describes the Bash script until then.
 - Build the Go binary with `go build -o bin/folio ./cmd/folio`: a plain
   `go build` would overwrite the Bash script at the repository root.
 - Tests: `bats test/` (bats-core, pinned in construct's bootstrap) for the Bash

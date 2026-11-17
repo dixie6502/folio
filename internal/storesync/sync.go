@@ -271,11 +271,8 @@ func growCheckout(store string) error {
 			add = append(add, name)
 		}
 	}
-	entries, _ := os.ReadDir(store)
-	for _, entry := range entries {
-		if entry.IsDir() && notebook.IsNotebook(filepath.Join(store, entry.Name())) {
-			want(entry.Name())
-		}
+	for _, dir := range notebook.Notebooks(store) {
+		want(filepath.Base(dir))
 	}
 	tracked, _ := gitcmd.Run(store, "ls-tree", "-d", "--name-only", "-z", "HEAD")
 	for _, name := range strings.Split(tracked, "\x00") {

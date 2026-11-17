@@ -94,13 +94,31 @@ overwriting. Missing: the notebook starts empty.
 
 ### Switcher
 
-Unchanged from `README.md`: filter as you type, exact matching (each word a
-contiguous substring), `#tags` shown and searchable, **Enter** opens,
-**Ctrl-N** creates, `-c` makes Enter create on no match, `.md` implicit,
-`folder/name` creates in a subfolder, a case-only variant of an existing path
-reuses it. `--all` filters the notes of every notebook in every store found.
-A non-interactive `folio --filter <query>` prints the ranked matches (for
-scripts and tests).
+As in `README.md`, with the built-in picker drawn inline (up to 40% of the
+terminal) on `/dev/tty`:
+
+- Filter as you type. Each word of the query must appear in a note's name or
+  `#tags` as a contiguous substring; case is ignored unless the query has an
+  upper-case letter. Best first: words matching at the start of a name part,
+  then earlier, then shorter names; ties keep path order.
+- Keys: **Enter** opens; **Ctrl-N** creates a note named by the query (with
+  `-c`, **Enter** creates when nothing matches, and Ctrl-N moves down);
+  Up/Ctrl-K/Ctrl-P and Down/Ctrl-J move; Backspace, Ctrl-W (word) and Ctrl-U
+  (all) edit the query; pasted text joins it on one line; Esc, Ctrl-C or
+  Ctrl-G cancel.
+- `.md` is implicit, `folder/name` creates in a subfolder, a case-only
+  variant of an existing path reuses it, and a name with a part starting
+  with `_` or `.` is refused (the listing would never show it). Files and
+  folders starting with `_` or `.` are not listed; `.gitignore` is not read.
+- `--all` filters the notes of every notebook in every store, named
+  `<owner>/<notebook>/<note>` (`<host>/<owner>/…` when the owner has stores
+  under two hosts); it never creates. `folio --filter <query>`
+  prints the current notebook's matches, best first, one name per line.
+- `$EDITOR` (split on spaces, so it may hold flags, e.g. `code -w`), else
+  `vim`, opens the note on the terminal, whatever folio's stdin and stdout.
+- Pasted text joins the query on one line, without control characters; a
+  created note's name is the query trimmed. A note or folder that cannot be
+  read is skipped, never failing the whole listing.
 
 ### Moving and forgetting
 
@@ -111,7 +129,7 @@ scripts and tests).
   moving within its store; copy then delete across stores. When the folder
   was already moved by hand, it moves only the notebook.
 - `folio forget <folder>` deletes an orphan's notebook and every note in it,
-  after a `y` on the prompt. It refuses a notebook whose folder exists, and
+  after a `y` on a prompt that counts every file it deletes. It refuses a notebook whose folder exists, and
   refuses to run without a terminal, so a calling tool never confirms a
   deletion on the user's behalf.
 

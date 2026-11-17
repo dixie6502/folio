@@ -153,6 +153,21 @@ func (e Env) Stores() (stores, misplaced []string) {
 	return stores, misplaced
 }
 
+// Notebooks lists the notebooks of store: its visible folders holding the
+// notebook marker.
+func Notebooks(store string) []string {
+	var notebooks []string
+	for _, dir := range visibleDirs(store) {
+		if IsNotebook(dir) {
+			notebooks = append(notebooks, dir)
+		}
+	}
+	return notebooks
+}
+
+// Owner returns the name of the owner folder a store sits in.
+func Owner(store string) string { return filepath.Base(filepath.Dir(store)) }
+
 // visibleDirs lists the folders in dir whose names do not start with a dot.
 func visibleDirs(dir string) []string {
 	entries, _ := os.ReadDir(dir)

@@ -130,7 +130,7 @@ func TestForget(t *testing.T) {
 	var asked string
 	_, err = env.Forget(gone, func(question string) bool { asked = question; return false })
 	wantError(t, err, "kept")
-	if !strings.Contains(asked, "1 note(s)") || !IsNotebook(orphan) {
+	if !strings.Contains(asked, "2 file(s)") || !IsNotebook(orphan) { // a.md and the marker
 		t.Fatalf("question %q, or the notebook was not kept", asked)
 	}
 	_, err = env.Forget(gone, nil)

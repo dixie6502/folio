@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Check reports the problems of every store's notebooks: orphan, nested and
@@ -23,27 +22,22 @@ func (e Env) Check() []string {
 	return problems
 }
 
-// checkNotebooks reports the problems of store's top-level folders.
+// checkNotebooks reports the problems of store's visible folders.
 func checkNotebooks(store string) []string {
-	entries, err := os.ReadDir(store)
-	if err != nil {
+	if _, err := os.ReadDir(store); err != nil {
 		return []string{fmt.Sprintf("%s: %v", store, err)}
 	}
 	var problems []string
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+	for _, dir := range visibleDirs(store) {
+		if !IsNotebook(dir) {
+			problems = append(problems, fmt.Sprintf("%s: stray folder, not a notebook", dir))
 			continue
 		}
-		notebook := filepath.Join(store, entry.Name())
-		if !IsNotebook(notebook) {
-			problems = append(problems, fmt.Sprintf("%s: stray folder, not a notebook", notebook))
-			continue
-		}
-		if folder := folderOf(notebook); !exists(folder) {
+		if folder := folderOf(dir); !exists(folder) {
 			problems = append(problems, fmt.Sprintf("%s: orphan, %s is gone: folio mv %s <new folder>, or folio forget %s",
-				notebook, folder, folder, folder))
+				dir, folder, folder, folder))
 		}
-		problems = append(problems, checkInside(notebook)...)
+		problems = append(problems, checkInside(dir)...)
 	}
 	return problems
 }

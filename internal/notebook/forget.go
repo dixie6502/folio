@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Forget deletes the notebook of folder, which must no longer exist, after
@@ -22,7 +21,7 @@ func (e Env) Forget(folder string, confirm Confirm) (string, error) {
 	if !ok || !IsNotebook(notebook) {
 		return "", fmt.Errorf("%s has no notebook", folder)
 	}
-	question := fmt.Sprintf("delete %s and its %d note(s)?", notebook, countNotes(notebook))
+	question := fmt.Sprintf("delete %s and the %d file(s) in it?", notebook, countFiles(notebook))
 	if confirm == nil {
 		return "", fmt.Errorf("kept %s: folio forget asks for confirmation, so it needs a terminal", notebook)
 	}
@@ -35,11 +34,12 @@ func (e Env) Forget(folder string, confirm Confirm) (string, error) {
 	return "forgot " + notebook, nil
 }
 
-// countNotes returns the number of *.md files under dir.
-func countNotes(dir string) int {
+// countFiles returns the number of files under dir: everything forget
+// deletes, hidden files included.
+func countFiles(dir string) int {
 	count := 0
 	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
-		if err == nil && !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+		if err == nil && !entry.IsDir() {
 			count++
 		}
 		return nil
